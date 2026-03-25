@@ -378,13 +378,12 @@ async function fetchJobDetail(jobId: number): Promise<PSAJobDetail> {
   };
 
   // Financial fields
-  for (const field of ['CompletedDisplay', 'RevenueDisplay', 'Deductible']) {
-    const val = extractInputValue(html, `Entity_${field}`);
-    const key = field.toLowerCase() as keyof PSAJobDetail;
-    if (val) {
-      (detail as Record<string, unknown>)[key] = parseFloat(val) || 0;
-    }
-  }
+  const completedVal = extractInputValue(html, 'Entity_CompletedDisplay');
+  if (completedVal) detail.completeddisplay = parseFloat(completedVal) || 0;
+  const revenueVal = extractInputValue(html, 'Entity_RevenueDisplay');
+  if (revenueVal) detail.revenuedisplay = parseFloat(revenueVal) || 0;
+  const deductibleVal = extractInputValue(html, 'Entity_Deductible');
+  if (deductibleVal) detail.deductible = parseFloat(deductibleVal) || 0;
 
   // Job type
   detail.job_type = extractSelectValue(html, 'Entity_JobTypeID');
@@ -434,13 +433,14 @@ async function fetchJobDetail(jobId: number): Promise<PSAJobDetail> {
   detail.emails = extractEmails(html);
 
   // Address
-  for (const field of ['Address1', 'City', 'Region', 'PostalCode']) {
-    const val = extractInputValue(html, `Entity_rm_site_${field}`);
-    if (val) {
-      const key = `site_${field.toLowerCase()}` as keyof PSAJobDetail;
-      (detail as Record<string, unknown>)[key] = val;
-    }
-  }
+  const addr1 = extractInputValue(html, 'Entity_rm_site_Address1');
+  if (addr1) detail.site_address1 = addr1;
+  const cityVal = extractInputValue(html, 'Entity_rm_site_City');
+  if (cityVal) detail.site_city = cityVal;
+  const regionVal = extractInputValue(html, 'Entity_rm_site_Region');
+  if (regionVal) detail.site_region = regionVal;
+  const postalVal = extractInputValue(html, 'Entity_rm_site_PostalCode');
+  if (postalVal) detail.site_postalcode = postalVal;
 
   return detail;
 }
