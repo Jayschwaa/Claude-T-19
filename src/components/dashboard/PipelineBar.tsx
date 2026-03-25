@@ -1,0 +1,1 @@
+export default function PipelineBar() { return null; }

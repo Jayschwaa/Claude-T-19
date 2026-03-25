@@ -1,0 +1,1 @@
+export default function JobListView() { return null; }
