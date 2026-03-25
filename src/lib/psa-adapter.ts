@@ -19,14 +19,32 @@ function getCookieHeader(): string {
 }
 
 function extractSetCookies(headers: Headers): void {
-  const setCookies = headers.getSetCookie?.() || [];
-  for (const sc of setCookies) {
+  // Try getSetCookie() first (Node 20+), fall back to get('set-cookie') for Node 18
+  let setCookieValues: string[] = [];
+
+  if (typeof headers.getSetCookie === 'function') {
+    setCookieValues = headers.getSetCookie();
+  } else {
+    // Node 18 fallback: get('set-cookie') returns all values joined by ', '
+    // We need to split carefully since cookie values can contain commas in expires
+    const raw = headers.get('set-cookie');
+    if (raw) {
+      // Split on ', ' followed by a cookie name pattern (word=)
+      setCookieValues = raw.split(/,\s*(?=[A-Za-z_][A-Za-z0-9_]*=)/);
+    }
+  }
+
+  for (const sc of setCookieValues) {
     const nameVal = sc.split(';')[0].trim();
-    if (!nameVal) continue;
+    if (!nameVal || !nameVal.includes('=')) continue;
     const name = nameVal.split('=')[0];
     // Replace existing cookie with same name, or add new
     sessionCookies = sessionCookies.filter(c => !c.startsWith(name + '='));
     sessionCookies.push(nameVal);
+  }
+
+  if (setCookieValues.length > 0) {
+    console.log(`[PSA] Extracted ${setCookieValues.length} cookies. Total: ${sessionCookies.length}`);
   }
 }
 
@@ -120,7 +138,7 @@ async function login(): Promise<void> {
   }
 
   sessionExpires = Date.now() + SESSION_TTL;
-  console.log(`[PSA] Login successful. Cookies: ${sessionCookies.length}`);
+  console.log(`[PSA] Login successful. Cookies: ${sessionCookies.length}: ${sessionCookies.map(c => c.split('=')[0]).join(', ')}`);
 }
 
 // ─── HTTP Helpers ────────────────────────────────────────────────────────────
@@ -442,6 +460,7 @@ async function fetchJobDetail(jobId: number): Promise<PSAJobDetail> {
   const postalVal = extractInputValue(html, 'Entity_rm_site_PostalCode');
   if (postalVal) detail.site_postalcode = postalVal;
 
+  console.log(`[PSA] Detail for ${jobId}: alt_status="${detail.alt_status}", revenue=${detail.revenuedisplay}, dates=${Object.keys(detail.dates).length}, phones=${detail.phones.length}`);
   return detail;
 }
 
