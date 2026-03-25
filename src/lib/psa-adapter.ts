@@ -846,6 +846,132 @@ export function createPSAAdapter(): DataAdapter {
   return new PSAAdapter();
 }
 
+// ─── Debug: fetch detail for a single job and return raw extraction ──────────
+
+export async function debugJobDetail(jobId: number): Promise<Record<string, unknown>> {
+  try {
+    await login();
+
+    const html = await psaGet(`/Job/Job/Edit/${jobId}`);
+
+    // Check if we got a login page instead of the job page
+    const isLoginPage = html.includes('id="Password"') || html.includes('/Account/Login');
+
+    // Raw alt_status extraction — try multiple regex patterns
+    const altSection = html.match(/id="Entity_AlternativeStatusID"[^>]*>([\s\S]*?)<\/select>/);
+    const altSectionDotS = html.match(/id="Entity_AlternativeStatusID"[^>]*>(.*?)<\/select>/s);
+
+    // All options in the select
+    const allOptions: string[] = [];
+    let selectedOption = '';
+    const sectionHtml = altSection?.[1] || altSectionDotS?.[1] || '';
+    if (sectionHtml) {
+      const optionMatches = sectionHtml.matchAll(/<option[^>]*value="([^"]*)"[^>]*>([^<]*)<\/option>/g);
+      for (const m of optionMatches) {
+        const isSelected = m[0].includes('selected');
+        allOptions.push(`${isSelected ? '>>> ' : '    '}value="${m[1]}" => "${m[2].trim()}"`);
+        if (isSelected) selectedOption = m[2].trim();
+      }
+    }
+
+    // Also check the "selected" attribute pattern used in the main code
+    const selectedRegex1 = sectionHtml.match(/selected[^>]*value="(\d+)"[^>]*>([^<]*)/);
+    const selectedRegex2 = sectionHtml.match(/selected[^>]*>([^<]*)/);
+
+    // Get some surrounding HTML around the alt status field
+    const altIndex = html.indexOf('Entity_AlternativeStatusID');
+    const altSnippet = altIndex >= 0 ? html.substring(Math.max(0, altIndex - 50), altIndex + 500) : 'NOT FOUND';
+
+    // Run the actual fetchJobDetail for comparison
+    const detail = await fetchJobDetail(jobId);
+
+    return {
+      jobId,
+      isLoginPage,
+      htmlLength: html.length,
+      cookieCount: sessionCookies.length,
+      cookieNames: sessionCookies.map(c => c.split('=')[0]),
+      altStatusFromDetail: detail.alt_status,
+      altStatusIdFromDetail: detail.alt_status_id,
+      altSectionFound: !!altSection,
+      altSectionDotSFound: !!altSectionDotS,
+      selectedRegex1Match: selectedRegex1 ? { value: selectedRegex1[1], text: selectedRegex1[2]?.trim() } : null,
+      selectedRegex2Match: selectedRegex2 ? { text: selectedRegex2[1]?.trim() } : null,
+      allOptionsCount: allOptions.length,
+      allOptions,
+      selectedOption,
+      altHtmlSnippet: altSnippet.substring(0, 1000),
+      detailDates: detail.dates,
+      detailRevenue: detail.revenuedisplay,
+      detailJobType: detail.job_type,
+    };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+// ─── Debug: auto-find T-19 jobs and debug their alt_status ───────────────────
+
+export async function debugT19Status(): Promise<Record<string, unknown>> {
+  try {
+    await login();
+
+    // Fetch first page to find T-19 jobs with their IDs
+    const formData: Record<string, string | number> = {
+      option: 'Open',
+      iDisplayStart: 0,
+      iDisplayLength: 100,
+      sEcho: 1,
+      iColumns: 11,
+      iSortCol_0: 8,
+      sSortDir_0: 'desc',
+      iSortingCols: 1,
+      mDataProp_10: 'id',
+    };
+    for (let i = 0; i < 10; i++) {
+      formData[`mDataProp_${i}`] = `col${i}`;
+    }
+
+    const body = await psaPost('/Job/Job/ListFilter', formData);
+    const data = JSON.parse(body);
+
+    // Find T-19 jobs
+    const t19Jobs = (data.aaData || [])
+      .filter((row: string[]) => (row[0] || '').startsWith('19-'))
+      .slice(0, 3) // Just debug 3 jobs
+      .map((row: string[]) => ({
+        jobNumber: row[0],
+        clientName: row[1],
+        listStatus: row[9],
+        jobId: row[10],
+      }));
+
+    if (t19Jobs.length === 0) {
+      return { error: 'No T-19 jobs found in first 100 open jobs' };
+    }
+
+    // Debug each one
+    const results = [];
+    for (const job of t19Jobs) {
+      const detail = await debugJobDetail(job.jobId);
+      results.push({
+        ...job,
+        debug: detail,
+      });
+    }
+
+    return {
+      nodeVersion: process.version,
+      cookieCount: sessionCookies.length,
+      cookieNames: sessionCookies.map(c => c.split('=')[0]),
+      t19JobsFound: t19Jobs.length,
+      results,
+    };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 // ─── Discovery / Debug (used by /api/psa-test route) ─────────────────────────
 
 export async function testPSAConnection(): Promise<{
