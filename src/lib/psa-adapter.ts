@@ -861,9 +861,9 @@ async function fetchT19Jobs(): Promise<Job[]> {
 
   const allJobNumbers = allJobs.map(j => j.job_number);
 
-  // Enrich jobs in batches of 5 for speed
+  // Enrich jobs in parallel batches — 10 concurrent for speed
   const enriched: Job[] = [];
-  const batchSize = 5;
+  const batchSize = 10;
 
   for (let i = 0; i < t19.length; i += batchSize) {
     const batch = t19.slice(i, i + batchSize);
@@ -925,59 +925,59 @@ export async function debugJobDetail(jobId: number): Promise<Record<string, unkn
 
     const html = await psaGet(`/Job/Job/Edit/${jobId}`);
 
-    // Check if we got a login page instead of the job page
-    const isLoginPage = html.includes('id="Password"') || html.includes('/Account/Login');
+    // Dump ALL <select> elements with their id/name and selected value
+    const selectRegex = /<select[^>]*(?:id="([^"]*)")?[^>]*(?:name="([^"]*)")?[^>]*>([\s\S]*?)<\/select>/g;
+    const allSelects: Record<string, { name: string; selectedValue: string; selectedText: string; options: string[] }> = {};
+    let match;
+    while ((match = selectRegex.exec(html)) !== null) {
+      const id = match[1] || '';
+      const name = match[2] || '';
+      const optionsHtml = match[3];
+      const key = id || name || `unknown_${Object.keys(allSelects).length}`;
 
-    // Raw alt_status extraction — try multiple regex patterns
-    const altSection = html.match(/id="Entity_AlternativeStatusID"[^>]*>([\s\S]*?)<\/select>/);
-    const altSectionDotS = html.match(/id="Entity_AlternativeStatusID"[^>]*>(.*?)<\/select>/s);
-
-    // All options in the select
-    const allOptions: string[] = [];
-    let selectedOption = '';
-    const sectionHtml = altSection?.[1] || altSectionDotS?.[1] || '';
-    if (sectionHtml) {
-      const optionMatches = sectionHtml.matchAll(/<option[^>]*value="([^"]*)"[^>]*>([^<]*)<\/option>/g);
-      for (const m of optionMatches) {
-        const isSelected = m[0].includes('selected');
-        allOptions.push(`${isSelected ? '>>> ' : '    '}value="${m[1]}" => "${m[2].trim()}"`);
-        if (isSelected) selectedOption = m[2].trim();
+      const sel = findSelectedOption(optionsHtml);
+      const opts: string[] = [];
+      const optMatches = optionsHtml.matchAll(/<option[^>]*value="([^"]*)"[^>]*>([^<]*)<\/option>/g);
+      for (const om of optMatches) {
+        const isSel = om[0].includes('selected');
+        if (isSel || opts.length < 5) {
+          opts.push(`${isSel ? '>>>' : '   '} "${om[1]}" => "${om[2].trim()}"`);
+        }
       }
+
+      allSelects[key] = {
+        name: name || id,
+        selectedValue: sel?.value || '',
+        selectedText: sel?.text || '',
+        options: opts,
+      };
     }
 
-    // Also check using the robust helper
-    const robustResult = findSelectedOption(sectionHtml);
-    // Legacy regex patterns for comparison
-    const selectedRegex1 = sectionHtml.match(/selected[^>]*value="(\d+)"[^>]*>([^<]*)/);
-    const selectedRegex2 = sectionHtml.match(/selected[^>]*>([^<]*)/);
-    const selectedRegex3 = sectionHtml.match(/value="(\d+)"[^>]*selected[^>]*>([^<]*)/); // value before selected
+    // Also try to find the id/name by re-parsing with a better regex for both attrs
+    const selectRegex2 = /<select[^>]*?(id="[^"]*"|name="[^"]*")[^>]*?(id="[^"]*"|name="[^"]*")?[^>]*>/g;
+    const selectIds: string[] = [];
+    while ((match = selectRegex2.exec(html)) !== null) {
+      selectIds.push(match[0].substring(0, 200));
+    }
 
-    // Get some surrounding HTML around the alt status field
-    const altIndex = html.indexOf('Entity_AlternativeStatusID');
-    const altSnippet = altIndex >= 0 ? html.substring(Math.max(0, altIndex - 50), altIndex + 500) : 'NOT FOUND';
-
-    // Run the actual fetchJobDetail for comparison
     const detail = await fetchJobDetail(jobId);
 
     return {
       jobId,
-      isLoginPage,
       htmlLength: html.length,
-      cookieCount: sessionCookies.length,
-      cookieNames: sessionCookies.map(c => c.split('=')[0]),
-      altStatusFromDetail: detail.alt_status,
-      altStatusIdFromDetail: detail.alt_status_id,
-      altSectionFound: !!altSection,
-      altSectionDotSFound: !!altSectionDotS,
-      selectedRegex1Match: selectedRegex1 ? { value: selectedRegex1[1], text: selectedRegex1[2]?.trim() } : null,
-      selectedRegex2Match: selectedRegex2 ? { text: selectedRegex2[1]?.trim() } : null,
-      allOptionsCount: allOptions.length,
-      allOptions,
-      selectedOption,
-      altHtmlSnippet: altSnippet.substring(0, 1000),
-      detailDates: detail.dates,
-      detailRevenue: detail.revenuedisplay,
-      detailJobType: detail.job_type,
+      allSelectFields: allSelects,
+      selectTags: selectIds.slice(0, 30),
+      detailResult: {
+        alt_status: detail.alt_status,
+        alt_status_id: detail.alt_status_id,
+        job_type: detail.job_type,
+        revenue: detail.revenuedisplay,
+        completed: detail.completeddisplay,
+        dates: detail.dates,
+        referrer: detail.referrer,
+        team: detail.team,
+        location: detail.location,
+      },
     };
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };

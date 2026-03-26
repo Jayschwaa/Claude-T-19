@@ -47,10 +47,9 @@ function startBackgroundLoad(psa: DataAdapter): void {
   );
 }
 
-// Wraps PSA adapter with fallback to mock data if PSA fails or is slow
+// Wraps PSA adapter — NEVER falls back to mock. Waits for real data.
 class SafePSAAdapter implements DataAdapter {
   private psa = createPSAAdapter();
-  private mock = new MockAdapter();
 
   async getJobs(): Promise<Job[]> {
     // If PSA data is already cached, return it
@@ -62,27 +61,25 @@ class SafePSAAdapter implements DataAdapter {
     // Start background load if not started
     startBackgroundLoad(this.psa);
 
-    // Try to get PSA data with a 120s timeout for the request
+    // Wait up to 10 minutes for PSA data — enriching 188+ jobs takes time
+    // Each job requires 3 HTTP requests (detail, financial, notes)
     try {
-      const jobs = await withTimeout(this.psa.getJobs(), 120000, 'PSA getJobs');
+      const jobs = await withTimeout(this.psa.getJobs(), 600000, 'PSA getJobs');
       psaJobsReady = jobs;
       console.log(`[PSA] Got ${jobs.length} jobs from PSA`);
       return jobs;
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error(`[PSA] Failed to fetch jobs: ${msg}`);
-      console.log('[PSA] Falling back to mock data (PSA loading in background)');
-      return this.mock.getJobs();
+      // Retry — do NOT fall back to mock
+      psaLoadStarted = false;
+      throw new Error(`PSA data not available: ${msg}`);
     }
   }
 
   async getJob(id: string): Promise<Job | null> {
-    try {
-      const jobs = await this.getJobs();
-      return jobs.find(j => j.id === id || j.jobNumber === id) || null;
-    } catch {
-      return this.mock.getJob(id);
-    }
+    const jobs = await this.getJobs();
+    return jobs.find(j => j.id === id || j.jobNumber === id) || null;
   }
 }
 
