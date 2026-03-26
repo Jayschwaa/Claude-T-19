@@ -120,22 +120,22 @@ export function getUpsellItems(job: Job): UpsellItem[] {
   items.push({
     label: 'Contents pack-out / inventory',
     flagged: isWtrMld && !job.hasContentsJob,
-    potentialValue: '$2,500–5,000',
+    potentialValue: '$2,500–$5,000',
   });
   items.push({
     label: 'Reconstruction estimate',
     flagged: total > 15000 && !job.hasReconEstimate,
-    potentialValue: '$8,000–25,000',
+    potentialValue: '$8,000–$25,000',
   });
   items.push({
     label: 'AC / duct cleaning',
     flagged: isWtrMld && !job.hasDuctCleaning,
-    potentialValue: '$800–1,500',
+    potentialValue: '$800–$1,500',
   });
   items.push({
     label: 'Source repair solution',
     flagged: !job.hasSourceSolution,
-    potentialValue: '$1,200–3,000',
+    potentialValue: '$1,200–$3,000',
   });
   return items;
 }
@@ -162,35 +162,35 @@ export function getTicketExpansionItems(job: Job): TicketExpansionItem[] {
   items.push({
     label: 'Supplement / line item review',
     flagged: isActive && job.estimateAmount > 0 && job.supplementAmount === 0,
-    potentialValue: '$500–3,000',
+    potentialValue: '$500–$3,000',
   });
 
   // Additional dry-out days from proper moisture documentation
   items.push({
     label: 'Extended drying charges',
     flagged: isWtrMld && !job.hasMoistureReadings && ['WIP', 'Scoped', 'Sales'].includes(job.status),
-    potentialValue: '$800–2,500',
+    potentialValue: '$800–$2,500',
   });
 
   // Containment / barrier charges often missed
   items.push({
     label: 'Containment & barrier setup',
     flagged: isWtrMld && !job.hasEquipmentPlacement && isActive,
-    potentialValue: '$300–1,200',
+    potentialValue: '$300–$1,200',
   });
 
   // Air quality / clearance testing
   items.push({
     label: 'Air quality / clearance testing',
     flagged: job.type === 'MLD' && isActive,
-    potentialValue: '$250–800',
+    potentialValue: '$250–$800',
   });
 
   // Equipment charges — often under-documented
   items.push({
     label: 'Equipment rental documentation',
     flagged: isWtrMld && !job.hasDryingLogs && ['WIP'].includes(job.status),
-    potentialValue: '$400–1,500',
+    potentialValue: '$400–$1,500',
   });
 
   return items;
