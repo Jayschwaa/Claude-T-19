@@ -163,9 +163,10 @@ async function psaGet(url: string): Promise<string> {
   if (!res.ok) {
     throw new Error(`PSA GET ${res.status}: ${res.statusText} for ${fullUrl}`);
   }
-  // Check if we got redirected to login page
+  // Check if we got redirected to login page (not just a page that contains login elements in its layout)
   const text = await res.text();
-  if (text.includes('id="Password"') && text.includes('/Account/Login')) {
+  const isActualLoginPage = text.includes('id="Password"') && text.includes('/Account/Login') && !text.includes('Entity_AlternativeStatusID') && text.length < 50000;
+  if (isActualLoginPage) {
     console.warn(`[PSA] Got login page for GET ${url} — session may have expired`);
     // Reset session and retry once
     sessionCookies = [];
@@ -658,16 +659,6 @@ async function enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> 
   );
   const supplementAmount = 0; // PSA doesn't have a clean supplement field
 
-  // Status — use alt_status if available, fall back to list status
-  const statusSource = detail?.alt_status || raw.status || '';
-  const status = mapStatus(statusSource);
-
-  if (detail && !detail.alt_status) {
-    console.warn(`[PSA] Job ${raw.job_number} (${raw.job_id}): detail fetched but alt_status is EMPTY. Using list status "${raw.status}" → "${status}"`);
-  } else if (detail?.alt_status) {
-    console.log(`[PSA] Job ${raw.job_number}: alt_status="${detail.alt_status}" → "${status}"`);
-  }
-
   // Type — from job number code or detail
   const type = mapJobTypeCode(raw.job_type_code || detail?.job_type || '');
 
@@ -690,7 +681,7 @@ async function enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> 
     if (d.includes('inspect') || d.includes('assess') || d.includes('scope')) {
       inspectedDate = inspectedDate || parseDateStr(val);
     }
-    if (d.includes('estimate') && d.includes('sent')) {
+    if ((d.includes('estimate') && d.includes('sent')) || d.includes('submitted')) {
       estimateSentDate = estimateSentDate || parseDateStr(val);
     }
     if (d.includes('approv')) {
@@ -705,6 +696,43 @@ async function enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> 
   }
 
   if (!openedDate) openedDate = new Date().toISOString().split('T')[0];
+
+  // ─── Status derivation ───────────────────────────────────────────────
+  // PSA's "Alternative Status" is a billing/payment status, not a workflow status.
+  // Derive workflow status from which lifecycle dates are populated (most advanced wins).
+  // Also check alt_status for billing-related keywords that indicate completion.
+  let status: WorkflowStatus;
+  const altStatus = (detail?.alt_status || '').toLowerCase();
+  const altStatusIndicatesCompleted = altStatus.includes('paid') || altStatus.includes('collections') ||
+    altStatus.includes('closed') || altStatus.includes('write off') || altStatus.includes('invoiced');
+  const altStatusIndicatesPending = altStatus.includes('submitted') || altStatus.includes('review') ||
+    altStatus.includes('negotiat') || altStatus.includes('in process');
+  const altStatusIndicatesWIP = altStatus.includes('appointment') || altStatus.includes('hold');
+
+  if (completedDate) {
+    status = 'Completed';
+  } else if (productionStartDate) {
+    status = 'WIP';
+  } else if (approvedDate) {
+    status = 'Approved';
+  } else if (estimateSentDate || altStatusIndicatesPending) {
+    status = 'Pending';
+  } else if (inspectedDate) {
+    status = 'Inspected';
+  } else if (receivedDate || openedDate) {
+    // Check if notes or alt_status suggest work is in progress
+    if (altStatusIndicatesWIP) {
+      status = 'WIP';
+    } else if (altStatusIndicatesCompleted) {
+      status = 'Completed';
+    } else {
+      status = 'Received';
+    }
+  } else {
+    status = 'No Dates';
+  }
+
+  console.log(`[PSA] Job ${raw.job_number}: dates=[${Object.keys(dates).join(',')}] alt="${detail?.alt_status || ''}" → status="${status}"`);
 
   // Last activity from notes
   let lastActivityDate = openedDate;
