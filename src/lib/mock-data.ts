@@ -473,6 +473,7 @@ export function generateMockJobs(): Job[] {
         approvedDate: approvedDate ? formatDate(approvedDate) : null,
         productionStartDate: productionStartDate ? formatDate(productionStartDate) : null,
         completedDate: completedDate ? formatDate(completedDate) : null,
+        invoicedDate: null,
         lastActivityDate: formatDate(lastActivityDate),
         estimateAmount,
         supplementAmount,

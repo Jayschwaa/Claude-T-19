@@ -33,6 +33,7 @@ export interface Job {
   approvedDate: string | null;
   productionStartDate: string | null;
   completedDate: string | null;
+  invoicedDate: string | null;
   lastActivityDate: string;
 
   // Financials

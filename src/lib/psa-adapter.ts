@@ -691,6 +691,7 @@ async function enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> 
   let approvedDate: string | null = null;
   let productionStartDate: string | null = null;
   let completedDate: string | null = null;
+  let invoicedDate: string | null = null;
 
   for (const [desc, val] of Object.entries(dates)) {
     const d = desc.toLowerCase();
@@ -725,6 +726,10 @@ async function enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> 
     ) || d.includes('close out') || d.includes('job close') || d.includes('final close');
     if (isFullJobComplete) {
       completedDate = completedDate || parseDateStr(val);
+    }
+    // Track invoice date — jobs with both completion + invoice are fully closed
+    if (d.includes('invoic')) {
+      invoicedDate = invoicedDate || parseDateStr(val);
     }
   }
 
@@ -837,6 +842,7 @@ async function enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> 
     approvedDate,
     productionStartDate,
     completedDate,
+    invoicedDate,
     lastActivityDate,
     estimateAmount,
     supplementAmount,
@@ -911,26 +917,19 @@ async function fetchT19Jobs(): Promise<Job[]> {
     console.log(`[PSA] Enriched ${Math.min(i + batchSize, t19.length)}/${t19.length}`);
   }
 
-  // Post-enrich filter: exclude jobs that are truly completed (have completion date + are old)
-  // The WIP report only shows active/in-progress jobs. Jobs with "Completed" status that also have
-  // an actual completion date AND were opened more than 90 days ago are considered done.
-  // This keeps recently-completed jobs visible (last 90 days) while hiding old finished ones.
-  const now = Date.now();
-  const NINETY_DAYS = 90 * 24 * 60 * 60 * 1000;
+  // Post-enrich filter: exclude jobs that are fully completed AND invoiced
+  // The WIP report only shows active jobs — once a job has both an "Actual Completion" date
+  // and an "Invoiced" date, it's fully closed and should not appear on the WIP board.
+  // Jobs that are completed but NOT yet invoiced are kept (they're in the "Completed" stage of WIP).
   const active = enriched.filter(j => {
-    if (j.status === 'Completed' && j.completedDate) {
-      const openedMs = new Date(j.openedDate).getTime();
-      const age = now - openedMs;
-      // If job is older than 90 days AND marked completed, exclude it
-      if (age > NINETY_DAYS) {
-        console.log(`[PSA] Excluding old completed job: ${j.jobNumber} (${j.customerName}) opened ${j.openedDate}`);
-        return false;
-      }
+    if (j.completedDate && j.invoicedDate) {
+      console.log(`[PSA] Excluding completed+invoiced: ${j.jobNumber} (${j.customerName})`);
+      return false;
     }
     return true;
   });
 
-  console.log(`[PSA] After filter: ${active.length} active jobs (excluded ${enriched.length - active.length} old completed)`);
+  console.log(`[PSA] After filter: ${active.length} active jobs (excluded ${enriched.length - active.length} completed+invoiced)`);
   return active;
 }
 
