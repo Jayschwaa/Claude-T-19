@@ -8,6 +8,12 @@ const PSA_USER = process.env.PSA_USERNAME || '';
 const PSA_PASS = process.env.PSA_PASSWORD || '';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+// Disable SSL verification to match MyClaw's Python approach
+// PSA's cert chain sometimes causes issues
+if (typeof process !== 'undefined') {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+}
+
 // ─── Cookie-based Session Management ─────────────────────────────────────────
 
 let sessionCookies: string[] = [];
@@ -153,10 +159,26 @@ async function psaGet(url: string): Promise<string> {
       'Accept': 'text/html,application/json',
     },
   });
+  extractSetCookies(res.headers);
   if (!res.ok) {
     throw new Error(`PSA GET ${res.status}: ${res.statusText} for ${fullUrl}`);
   }
-  return res.text();
+  // Check if we got redirected to login page
+  const text = await res.text();
+  if (text.includes('id="Password"') && text.includes('/Account/Login')) {
+    console.warn(`[PSA] Got login page for GET ${url} — session may have expired`);
+    // Reset session and retry once
+    sessionCookies = [];
+    sessionExpires = 0;
+    await login();
+    const retry = await fetch(fullUrl, {
+      headers: { 'User-Agent': UA, 'Cookie': getCookieHeader(), 'Accept': 'text/html,application/json' },
+    });
+    extractSetCookies(retry.headers);
+    if (!retry.ok) throw new Error(`PSA GET retry ${retry.status}: ${retry.statusText}`);
+    return retry.text();
+  }
+  return text;
 }
 
 async function psaPost(url: string, data: Record<string, string | number>): Promise<string> {
@@ -237,12 +259,27 @@ function parseDateStr(s: string | null | undefined): string | null {
 
 // ─── HTML Scraping Helpers (matching MyClaw's approach) ──────────────────────
 
+function findSelectedOption(optionsHtml: string): { value: string; text: string } | null {
+  // Match all <option> tags and find the one with "selected"
+  const optionRegex = /<option\s([^>]*)>([^<]*)<\/option>/gi;
+  let m;
+  while ((m = optionRegex.exec(optionsHtml)) !== null) {
+    const attrs = m[1];
+    const text = m[2].trim();
+    if (/\bselected\b/i.test(attrs)) {
+      const valueMatch = attrs.match(/value="([^"]*)"/);
+      return { value: valueMatch ? valueMatch[1] : '', text };
+    }
+  }
+  return null;
+}
+
 function extractSelectValue(html: string, fieldId: string): string {
-  const regex = new RegExp(`id="${fieldId}"[^>]*>(.*?)</select>`, 's');
+  const regex = new RegExp(`id="${fieldId}"[^>]*>([\\s\\S]*?)</select>`);
   const section = html.match(regex);
   if (!section) return '';
-  const selected = section[1].match(/selected[^>]*>([^<]*)/);
-  return selected ? selected[1].trim() : '';
+  const sel = findSelectedOption(section[1]);
+  return sel ? sel.text : '';
 }
 
 function extractInputValue(html: string, fieldId: string): string {
@@ -406,13 +443,13 @@ async function fetchJobDetail(jobId: number): Promise<PSAJobDetail> {
   // Job type
   detail.job_type = extractSelectValue(html, 'Entity_JobTypeID');
 
-  // Alt status
-  const altSection = html.match(/id="Entity_AlternativeStatusID"[^>]*>(.*?)<\/select>/s);
+  // Alt status — use robust option finder that handles any attribute order
+  const altSection = html.match(/id="Entity_AlternativeStatusID"[^>]*>([\s\S]*?)<\/select>/);
   if (altSection) {
-    const selected = altSection[1].match(/selected[^>]*value="(\d+)"[^>]*>([^<]*)/);
-    if (selected) {
-      detail.alt_status_id = selected[1];
-      detail.alt_status = selected[2].trim();
+    const sel = findSelectedOption(altSection[1]);
+    if (sel) {
+      detail.alt_status_id = sel.value;
+      detail.alt_status = sel.text;
     }
   }
 
@@ -624,6 +661,12 @@ async function enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> 
   // Status — use alt_status if available, fall back to list status
   const statusSource = detail?.alt_status || raw.status || '';
   const status = mapStatus(statusSource);
+
+  if (detail && !detail.alt_status) {
+    console.warn(`[PSA] Job ${raw.job_number} (${raw.job_id}): detail fetched but alt_status is EMPTY. Using list status "${raw.status}" → "${status}"`);
+  } else if (detail?.alt_status) {
+    console.log(`[PSA] Job ${raw.job_number}: alt_status="${detail.alt_status}" → "${status}"`);
+  }
 
   // Type — from job number code or detail
   const type = mapJobTypeCode(raw.job_type_code || detail?.job_type || '');
@@ -874,9 +917,12 @@ export async function debugJobDetail(jobId: number): Promise<Record<string, unkn
       }
     }
 
-    // Also check the "selected" attribute pattern used in the main code
+    // Also check using the robust helper
+    const robustResult = findSelectedOption(sectionHtml);
+    // Legacy regex patterns for comparison
     const selectedRegex1 = sectionHtml.match(/selected[^>]*value="(\d+)"[^>]*>([^<]*)/);
     const selectedRegex2 = sectionHtml.match(/selected[^>]*>([^<]*)/);
+    const selectedRegex3 = sectionHtml.match(/value="(\d+)"[^>]*selected[^>]*>([^<]*)/); // value before selected
 
     // Get some surrounding HTML around the alt status field
     const altIndex = html.indexOf('Entity_AlternativeStatusID');
