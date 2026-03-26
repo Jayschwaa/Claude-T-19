@@ -42,13 +42,13 @@ export default function SummaryBar({ summary, activeView, activeStatus, onBoxCli
         </div>
         <div className={boxClass('ticket-expansion', 'border-yellow-700/50')} onClick={() => onBoxClick('ticket-expansion')}>
           <p className="text-xs text-slate-400">Ticket Expansion</p>
-          <p className="text-xl font-bold text-yellow-400">{fmt(summary.ticketExpansion)}</p>
-          <p className="text-[10px] text-slate-500">supplements identified</p>
-          {activeView === 'ticket-expansion' && <p className="text-[10px] text-yellow-400 mt-1">Showing jobs with supplements</p>}
+          <p className="text-lg font-bold text-yellow-400">{fmt(summary.ticketExpansion)}–{fmt(summary.ticketExpansionHigh)}</p>
+          <p className="text-[10px] text-slate-500">supplements, drying, containment</p>
+          {activeView === 'ticket-expansion' && <p className="text-[10px] text-yellow-400 mt-1">Jobs with expansion opportunity</p>}
         </div>
         <div className={boxClass('upsell', 'border-green-700/50')} onClick={() => onBoxClick('upsell')}>
           <p className="text-xs text-slate-400">Upsell Potential</p>
-          <p className="text-xl font-bold text-green-400">{fmt(summary.upsellPotential)}</p>
+          <p className="text-lg font-bold text-green-400">{fmt(summary.upsellPotential)}–{fmt(summary.upsellPotentialHigh)}</p>
           <p className="text-[10px] text-slate-500">contents, recon, duct, source</p>
           {activeView === 'upsell' && <p className="text-[10px] text-green-400 mt-1">Sorted by upsell opportunity</p>}
         </div>

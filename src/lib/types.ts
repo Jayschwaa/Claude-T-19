@@ -97,7 +97,18 @@ export interface ChecklistItem {
 export interface UpsellItem {
   label: string;
   flagged: boolean;
-  potentialValue: string;
+  potentialValue: string;  // Range like "$2,500–5,000"
+}
+
+export interface TicketExpansionItem {
+  label: string;
+  flagged: boolean;
+  potentialValue: string;  // Range like "$500–2,000"
+}
+
+export interface OutreachTip {
+  label: string;
+  icon: string;  // emoji or short label
 }
 
 export interface ScoreBreakdown {
@@ -118,14 +129,18 @@ export interface ScoredJob {
   iicrcItems: ChecklistItem[];
   ticketItems: ChecklistItem[];
   upsellItems: UpsellItem[];
+  ticketExpansionItems: TicketExpansionItem[];
+  outreachTips: OutreachTip[];
 }
 
 // Dashboard summary
 export interface DashboardSummary {
   totalJobs: number;
   estimatedRevenue: number;         // sum of estimateAmount on all jobs
-  ticketExpansion: number;          // sum of supplementAmount potential
-  upsellPotential: number;         // sum of flagged upsell dollar values
+  ticketExpansion: number;          // sum of ticket expansion low end
+  ticketExpansionHigh: number;      // sum of ticket expansion high end
+  upsellPotential: number;         // sum of flagged upsell low end
+  upsellPotentialHigh: number;     // sum of flagged upsell high end
   jobsByStatus: Record<string, number>;
   revenueByStatus: Record<string, number>;
   jobsByType: Record<string, number>;

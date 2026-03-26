@@ -14,7 +14,9 @@ export default async function Dashboard() {
     totalJobs: jobs.length,
     estimatedRevenue: 0,
     ticketExpansion: 0,
+    ticketExpansionHigh: 0,
     upsellPotential: 0,
+    upsellPotentialHigh: 0,
     jobsByStatus: {},
     revenueByStatus: {},
     jobsByType: {},
@@ -38,7 +40,6 @@ export default async function Dashboard() {
 
     // Revenue
     summary.estimatedRevenue += j.estimateAmount;
-    summary.ticketExpansion += j.supplementAmount;
 
     // Status counts and revenue
     summary.jobsByStatus[j.status] = (summary.jobsByStatus[j.status] || 0) + 1;
@@ -54,11 +55,29 @@ export default async function Dashboard() {
     totalTicket += sj.ticketItems.length;
     totalTicketPresent += sj.ticketItems.filter(i => i.present).length;
 
-    // Upsell potential (use low end of range)
+    // Helper to extract low/high from a range string like "$2,500–5,000"
+    function extractRange(val: string): [number, number] {
+      const nums = val.match(/\$([\d,]+)/g) ?? [];
+      const low = nums[0] ? parseInt(nums[0].replace(/[$,]/g, '')) : 0;
+      const high = nums[1] ? parseInt(nums[1].replace(/[$,]/g, '')) : low;
+      return [low, high];
+    }
+
+    // Upsell potential (extract low and high from range)
     for (const u of sj.upsellItems) {
       if (u.flagged) {
-        const match = u.potentialValue.match(/\$([\d,]+)/);
-        if (match) summary.upsellPotential += parseInt(match[1].replace(/,/g, ''));
+        const [low, high] = extractRange(u.potentialValue);
+        summary.upsellPotential += low;
+        summary.upsellPotentialHigh += high;
+      }
+    }
+
+    // Ticket expansion potential (same range approach)
+    for (const te of sj.ticketExpansionItems) {
+      if (te.flagged) {
+        const [low, high] = extractRange(te.potentialValue);
+        summary.ticketExpansion += low;
+        summary.ticketExpansionHigh += high;
       }
     }
 

@@ -29,7 +29,7 @@ function CheckBadge({ present }: { present: boolean }) {
 
 export default function JobCard({ scoredJob }: { scoredJob: ScoredJob }) {
   const [expanded, setExpanded] = useState(false);
-  const { job, score, rank, iicrcItems, ticketItems, upsellItems } = scoredJob;
+  const { job, score, rank, iicrcItems, ticketItems, upsellItems, ticketExpansionItems, outreachTips } = scoredJob;
 
   const daysOpen = Math.floor((Date.now() - new Date(job.openedDate).getTime()) / 86400000);
   const daysSinceActivity = Math.floor((Date.now() - new Date(job.lastActivityDate).getTime()) / 86400000);
@@ -37,6 +37,7 @@ export default function JobCard({ scoredJob }: { scoredJob: ScoredJob }) {
   const iicrcGaps = iicrcItems.filter(i => !i.present).length;
   const ticketGaps = ticketItems.filter(i => !i.present).length;
   const upsellCount = upsellItems.filter(i => i.flagged).length;
+  const expansionCount = ticketExpansionItems.filter(i => i.flagged).length;
 
   const statusColors: Record<string, string> = {
     'Received': 'bg-blue-600', 'Scoped': 'bg-amber-600', 'Sales': 'bg-purple-600',
@@ -148,9 +149,24 @@ export default function JobCard({ scoredJob }: { scoredJob: ScoredJob }) {
               </div>
             </div>
 
-            {/* Upsell + Contacts + People */}
+            {/* Ticket Expansion + Upsell + Outreach + Contacts + People */}
             <div>
-              <h4 className="text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wide">Upsell Opportunities</h4>
+              {/* Ticket Expansion Opportunities */}
+              <h4 className="text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wide">Ticket Expansion</h4>
+              <div className="space-y-1">
+                {ticketExpansionItems.filter(i => i.flagged).map((item, i) => (
+                  <div key={i} className="flex items-center justify-between text-xs">
+                    <span className="text-yellow-300">{item.label}</span>
+                    <span className="text-yellow-400 font-medium">{item.potentialValue}</span>
+                  </div>
+                ))}
+                {ticketExpansionItems.filter(i => i.flagged).length === 0 && (
+                  <p className="text-xs text-slate-500">No expansion opportunities identified</p>
+                )}
+              </div>
+
+              {/* Upsell Opportunities */}
+              <h4 className="text-xs font-semibold text-slate-300 mt-4 mb-2 uppercase tracking-wide">Upsell Opportunities</h4>
               <div className="space-y-1">
                 {upsellItems.filter(i => i.flagged).map((item, i) => (
                   <div key={i} className="flex items-center justify-between text-xs">
@@ -162,6 +178,21 @@ export default function JobCard({ scoredJob }: { scoredJob: ScoredJob }) {
                   <p className="text-xs text-slate-500">No upsell gaps identified</p>
                 )}
               </div>
+
+              {/* Commercial Outreach Tips */}
+              {outreachTips.length > 0 && (
+                <div className="mt-4">
+                  <h4 className="text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wide">Commercial Outreach</h4>
+                  <div className="space-y-1">
+                    {outreachTips.map((tip, i) => (
+                      <div key={i} className="flex items-start gap-2 text-xs">
+                        <span className="text-cyan-400 shrink-0 mt-0.5">&rarr;</span>
+                        <span className="text-cyan-300">{tip.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* People */}
               <h4 className="text-xs font-semibold text-slate-300 mt-4 mb-2 uppercase tracking-wide">Assigned</h4>

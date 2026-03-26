@@ -1,4 +1,4 @@
-import { Job, ScoreBreakdown, ScoredJob, ChecklistItem, UpsellItem } from './types';
+import { Job, ScoreBreakdown, ScoredJob, ChecklistItem, UpsellItem, TicketExpansionItem, OutreachTip } from './types';
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
 
@@ -151,9 +151,79 @@ function scoreUpsells(job: Job): { points: number; explanation: string; items: U
   return { points, explanation, items };
 }
 
+// ─── Ticket Expansion Opportunities (dollar ranges) ──────────────────────────
+
+export function getTicketExpansionItems(job: Job): TicketExpansionItem[] {
+  const items: TicketExpansionItem[] = [];
+  const isWtrMld = job.type === 'WTR' || job.type === 'MLD';
+  const isActive = ['Scoped', 'Sales', 'WIP'].includes(job.status);
+
+  // Supplement review — most jobs have line items that can be supplemented
+  items.push({
+    label: 'Supplement / line item review',
+    flagged: isActive && job.estimateAmount > 0 && job.supplementAmount === 0,
+    potentialValue: '$500–3,000',
+  });
+
+  // Additional dry-out days from proper moisture documentation
+  items.push({
+    label: 'Extended drying charges',
+    flagged: isWtrMld && !job.hasMoistureReadings && ['WIP', 'Scoped', 'Sales'].includes(job.status),
+    potentialValue: '$800–2,500',
+  });
+
+  // Containment / barrier charges often missed
+  items.push({
+    label: 'Containment & barrier setup',
+    flagged: isWtrMld && !job.hasEquipmentPlacement && isActive,
+    potentialValue: '$300–1,200',
+  });
+
+  // Air quality / clearance testing
+  items.push({
+    label: 'Air quality / clearance testing',
+    flagged: job.type === 'MLD' && isActive,
+    potentialValue: '$250–800',
+  });
+
+  // Equipment charges — often under-documented
+  items.push({
+    label: 'Equipment rental documentation',
+    flagged: isWtrMld && !job.hasDryingLogs && ['WIP'].includes(job.status),
+    potentialValue: '$400–1,500',
+  });
+
+  return items;
+}
+
+// ─── Commercial Outreach Tips ────────────────────────────────────────────────
+
+export function getOutreachTips(job: Job): OutreachTip[] {
+  const tips: OutreachTip[] = [];
+
+  // Detect commercial / multi-unit properties from referrer, customer name, or address keywords
+  const name = job.customerName.toLowerCase();
+  const bd = job.businessDev.toLowerCase();
+  const isCommercial = bd.includes('property management') || bd.includes('contractor') ||
+    bd.includes('realtor') || bd.includes('tpa') ||
+    name.includes('condo') || name.includes('apartment') || name.includes('llc') ||
+    name.includes('inc') || name.includes('management') || name.includes('village') ||
+    name.includes('acres') || name.includes('bend') || name.includes('loc #') ||
+    name.includes('m/y') || name.includes('studios');
+
+  if (isCommercial) {
+    tips.push({ label: 'Visit neighboring units — check for water migration', icon: 'door' });
+    tips.push({ label: 'Meet property management on-site — introduce full services', icon: 'handshake' });
+    tips.push({ label: 'Leave business cards with HOA / front desk / property manager', icon: 'card' });
+    tips.push({ label: 'Ask about other units or common areas needing assessment', icon: 'search' });
+  }
+
+  return tips;
+}
+
 // ─── Main Scoring ────────────────────────────────────────────────────────────
 
-function scoreJob(job: Job): { score: ScoreBreakdown; iicrcItems: ChecklistItem[]; ticketItems: ChecklistItem[]; upsellItems: UpsellItem[] } {
+function scoreJob(job: Job): { score: ScoreBreakdown; iicrcItems: ChecklistItem[]; ticketItems: ChecklistItem[]; upsellItems: UpsellItem[]; ticketExpansionItems: TicketExpansionItem[]; outreachTips: OutreachTip[] } {
   const d = scoreDaysOpen(job);
   const r = scoreRevenue(job);
   const i = scoreInactivity(job);
@@ -178,12 +248,14 @@ function scoreJob(job: Job): { score: ScoreBreakdown; iicrcItems: ChecklistItem[
     iicrcItems: ic.items,
     ticketItems: tk.items,
     upsellItems: up.items,
+    ticketExpansionItems: getTicketExpansionItems(job),
+    outreachTips: getOutreachTips(job),
   };
 }
 
 export function scoreOneJob(job: Job): ScoredJob {
   const result = scoreJob(job);
-  return { job, score: result.score, rank: 0, iicrcItems: result.iicrcItems, ticketItems: result.ticketItems, upsellItems: result.upsellItems };
+  return { job, score: result.score, rank: 0, iicrcItems: result.iicrcItems, ticketItems: result.ticketItems, upsellItems: result.upsellItems, ticketExpansionItems: result.ticketExpansionItems, outreachTips: result.outreachTips };
 }
 
 export function scoreAllJobs(jobs: Job[]): ScoredJob[] {
