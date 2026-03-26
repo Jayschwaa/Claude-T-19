@@ -208,16 +208,20 @@ async function psaPost(url: string, data: Record<string, string | number>): Prom
 
 // ─── Data Mapping ────────────────────────────────────────────────────────────
 
+// PSA type codes that appear on the WIP report: WTR, MLD, CON, STC, CPT, FRM
+// STR (structural/reconstruction) and PLM (plumbing) are sub-jobs NOT tracked on WIP
+const EXCLUDED_PSA_TYPES = new Set(['STR', 'PLM']);
+
 function mapJobTypeCode(code: string): JobType {
   const c = (code || '').toUpperCase().trim();
   if (c === 'WTR' || c.includes('WATER')) return 'WTR';
   if (c === 'MLD' || c.includes('MOLD')) return 'MLD';
-  if (c === 'STR' || c.includes('STORM') || c.includes('WIND')) return 'STR';
   if (c === 'FIR' || c.includes('FIRE')) return 'FIR';
   if (c === 'BIO') return 'BIO';
   if (c === 'CON' || c === 'CNTNT' || c.includes('CONTENT')) return 'CNTNT';
   if (c === 'DUCT' || c.includes('HVAC')) return 'DUCT';
-  if (c === 'RCN' || c === 'RECON' || c.includes('REBUILD')) return 'RECON';
+  if (c === 'RCN' || c === 'RECON' || c.includes('REBUILD') || c === 'STR' || c.includes('STORM')) return 'RECON';
+  if (c === 'FRM' || c === 'CPT' || c === 'STC') return 'WTR'; // Framing/Carpet/STC map to WTR on WIP
   return 'WTR';
 }
 
@@ -693,6 +697,9 @@ async function enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> 
   let completedDate: string | null = null;
   let invoicedDate: string | null = null;
 
+  let estimateCompletedDate: string | null = null; // Estimate document finalized (still Scoped)
+  let estimateSubmittedDate: string | null = null; // Estimate sent to insurance (Sales)
+
   for (const [desc, val] of Object.entries(dates)) {
     const d = desc.toLowerCase();
     if (d.includes('received') || d.includes('created') || d.includes('reported') || d.includes('open')) {
@@ -702,10 +709,13 @@ async function enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> 
     if (d.includes('inspect') || d.includes('assess') || d.includes('scope')) {
       inspectedDate = inspectedDate || parseDateStr(val);
     }
-    if ((d.includes('estimate') && d.includes('sent')) || d.includes('submitted') ||
-        (d.includes('complet') && d.includes('estimate')) || d === 'esn submitted') {
-      // "Completed Estimate" = estimate is finalized, "ESN Submitted" = estimate sent
-      estimateSentDate = estimateSentDate || parseDateStr(val);
+    // "Completed Estimate" = estimate document finalized (still in Scoped, NOT Sales)
+    if (d.includes('complet') && d.includes('estimate')) {
+      estimateCompletedDate = estimateCompletedDate || parseDateStr(val);
+    }
+    // "ESN Submitted" / "Estimate Sent" = sent to insurance → now in Sales
+    if ((d.includes('estimate') && d.includes('sent')) || d.includes('submitted') || d === 'esn submitted') {
+      estimateSubmittedDate = estimateSubmittedDate || parseDateStr(val);
     }
     if (d.includes('approv')) {
       approvedDate = approvedDate || parseDateStr(val);
@@ -733,6 +743,13 @@ async function enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> 
     }
   }
 
+  // Resolve estimateSentDate: prefer actual submission over just "Completed Estimate"
+  // "Completed Estimate" means the doc is finalized (Scoped stage), while "ESN Submitted" means
+  // it was actually sent to insurance (Sales stage).
+  // For status derivation, we use estimateSubmittedDate for Sales trigger, but keep
+  // estimateCompletedDate available for the estimateSentDate output field.
+  estimateSentDate = estimateSubmittedDate || estimateCompletedDate;
+
   if (!openedDate) openedDate = new Date().toISOString().split('T')[0];
 
   // ─── Status derivation ───────────────────────────────────────────────
@@ -751,9 +768,12 @@ async function enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> 
     status = 'Completed';
   } else if (productionStartDate) {
     status = 'WIP';
-  } else if (approvedDate || estimateSentDate || altStatusIndicatesSales) {
+  } else if (approvedDate || estimateSubmittedDate || altStatusIndicatesSales) {
+    // Sales = estimate was actually submitted/sent to insurance, or approved
+    // "Completed Estimate" alone keeps the job in Scoped (estimate doc finalized but not sent)
     status = 'Sales';
-  } else if (inspectedDate) {
+  } else if (inspectedDate || estimateCompletedDate) {
+    // Scoped = inspected OR estimate completed (but not yet submitted)
     status = 'Scoped';
   } else if (receivedDate || openedDate) {
     // Check if notes or alt_status suggest work is in progress
@@ -887,14 +907,17 @@ async function fetchT19Jobs(): Promise<Job[]> {
   const allJobs = await fetchAllOpenJobs(100);
   console.log(`[PSA] Total open jobs: ${allJobs.length}`);
 
-  // Filter to T-19, current year only — the WIP report only has year-26 jobs
+  // Filter to T-19, current year only, excluding STR/PLM sub-job types
+  // The WIP report only has year-26 jobs and excludes structural (STR) and plumbing (PLM) sub-jobs
   const t19 = allJobs.filter(j => {
     if (j.territory !== '19') return false;
     if (j.year !== '26') return false;
+    // STR (structural/reconstruction) and PLM (plumbing) are sub-jobs not tracked on WIP
+    if (EXCLUDED_PSA_TYPES.has(j.job_type_code.toUpperCase())) return false;
     return true;
   });
 
-  console.log(`[PSA] T-19 year-26 jobs: ${t19.length}`);
+  console.log(`[PSA] T-19 year-26 jobs (excl STR/PLM): ${t19.length}`);
 
   const allJobNumbers = allJobs.map(j => j.job_number);
 
