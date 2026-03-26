@@ -564,6 +564,7 @@ async function fetchJobFinancial(jobId: number): Promise<PSAFinancial> {
     }
   }
 
+  console.log(`[PSA] Financial: rev_est=${financial.revenue_estimate}, rev_act=${financial.revenue_actual}, cost_est=${financial.cost_estimate}`);
   return financial;
 }
 
@@ -649,12 +650,9 @@ async function enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> 
     text: n.note || n.subject || '',
   }));
 
-  // Revenue
-  const estimateAmount = Math.max(
-    financial?.revenue_estimate || 0,
-    financial?.revenue_actual || 0,
-    detail?.revenuedisplay || 0
-  );
+  // Revenue — use TotalRevenue.Estimate from financial endpoint (matches WIP report's "Sum of Estimated Revenue")
+  // Do NOT use revenuedisplay — that's a per-unit/rate field from the detail page, not the total estimate
+  const estimateAmount = financial?.revenue_estimate || financial?.revenue_actual || 0;
   const supplementAmount = 0; // PSA doesn't have a clean supplement field
 
   // Type — from job number code or detail
@@ -685,10 +683,21 @@ async function enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> 
     if (d.includes('approv')) {
       approvedDate = approvedDate || parseDateStr(val);
     }
-    if (d.includes('start') || d.includes('production') || d.includes('begin')) {
+    // Production start — match "production start", "work start", "start date", "mitigation start"
+    // but NOT "start" in other contexts like "restart"
+    if (d.includes('production') || d.includes('work start') || d === 'start date' ||
+        d.includes('mitigation start') || (d.includes('start') && !d.includes('restart') && !d.includes('estimate'))) {
       productionStartDate = productionStartDate || parseDateStr(val);
     }
-    if (d.includes('complet') || d.includes('close') || d.includes('finish')) {
+    // Job completion — ONLY match if it's the full job being completed, not a sub-task
+    // "Job Completed", "Completion Date", "Close Out", "Job Closed" → yes
+    // "Mitigation Completed", "Phase Complete", "Clearance Completed", "Demo Completed" → no
+    const isFullJobComplete = (
+      (d.includes('complet') || d.includes('finish')) &&
+      !d.includes('mitig') && !d.includes('phase') && !d.includes('clear') &&
+      !d.includes('demo') && !d.includes('drying') && !d.includes('pack')
+    ) || d.includes('close out') || d.includes('job close') || d.includes('final close');
+    if (isFullJobComplete) {
       completedDate = completedDate || parseDateStr(val);
     }
   }
@@ -838,22 +847,24 @@ async function enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> 
 
 // ─── Main Fetch Logic ────────────────────────────────────────────────────────
 
-const EXCLUDE_STATUSES = new Set(['complete', 'completed', 'invoiced', 'closed', 'paid', 'collections']);
-const EXCLUDE_ALT = new Set(['invoiced', 'paid', 'closed', 'collections', 'write off', 'write-off', 'completed']);
+// Year filter replaces the old status-based exclude filter
+// (PSA list status is always "Open", so status-based filtering was ineffective)
 
 async function fetchT19Jobs(): Promise<Job[]> {
   console.log('[PSA] Fetching all open jobs...');
   const allJobs = await fetchAllOpenJobs(100);
   console.log(`[PSA] Total open jobs: ${allJobs.length}`);
 
-  // Filter to T-19 and pre-invoice
+  // Filter to T-19, recent years only (matching MyClaw's approach: year 25 or 26)
+  // The WIP report only contains year-26 jobs — old jobs from 2017-2024 are not active
+  const RECENT_YEARS = new Set(['25', '26']);
   const t19 = allJobs.filter(j => {
     if (j.territory !== '19') return false;
-    if (EXCLUDE_STATUSES.has((j.status || '').toLowerCase())) return false;
+    if (!RECENT_YEARS.has(j.year)) return false;
     return true;
   });
 
-  console.log(`[PSA] T-19 pre-invoice jobs: ${t19.length}`);
+  console.log(`[PSA] T-19 recent jobs (year 25/26): ${t19.length}`);
 
   const allJobNumbers = allJobs.map(j => j.job_number);
 
@@ -876,14 +887,8 @@ async function fetchT19Jobs(): Promise<Job[]> {
     console.log(`[PSA] Enriched ${Math.min(i + batchSize, t19.length)}/${t19.length}`);
   }
 
-  // Post-enrich filter: remove jobs with alt_status indicating completion
-  const filtered = enriched.filter(j => {
-    // We stored alt_status in the status mapping already, but also check notes
-    return true; // The status mapping already handles this
-  });
-
-  console.log(`[PSA] Final job count: ${filtered.length}`);
-  return filtered;
+  console.log(`[PSA] Final job count: ${enriched.length}`);
+  return enriched;
 }
 
 // ─── Adapter Class ───────────────────────────────────────────────────────────
