@@ -50,12 +50,12 @@ export function getIICRCItems(job: Job): ChecklistItem[] {
   items.push({ label: 'Moisture readings', present: job.hasMoistureReadings });
   items.push({ label: 'Source documented', present: job.hasSourceDocumented });
 
-  // Equipment placement: Inspected+
-  if (['Inspected', 'Pending', 'Approved', 'WIP', 'Completed'].includes(s)) {
+  // Equipment placement: Scoped+
+  if (['Scoped', 'Sales', 'WIP', 'Completed'].includes(s)) {
     items.push({ label: 'Equipment placement', present: job.hasEquipmentPlacement });
   }
-  // Drying logs & daily monitoring: Pending+
-  if (['Pending', 'Approved', 'WIP', 'Completed'].includes(s)) {
+  // Drying logs & daily monitoring: Sales+
+  if (['Sales', 'WIP', 'Completed'].includes(s)) {
     items.push({ label: 'Drying logs', present: job.hasDryingLogs });
     items.push({ label: 'Daily monitoring', present: job.hasDailyMonitoring });
   }
@@ -89,11 +89,11 @@ export function getTicketItems(job: Job): ChecklistItem[] {
   items.push({ label: 'Phone number', present: job.hasPhoneNumber });
   items.push({ label: 'Photos', present: job.hasPhotos });
 
-  if (['Inspected', 'Pending', 'Approved', 'WIP', 'Completed'].includes(s)) {
+  if (['Scoped', 'Sales', 'WIP', 'Completed'].includes(s)) {
     items.push({ label: 'Estimate', present: job.hasEstimate });
     items.push({ label: 'Scope of work', present: job.hasScopeOfWork });
   }
-  if (['Approved', 'WIP', 'Completed'].includes(s)) {
+  if (['Sales', 'WIP', 'Completed'].includes(s)) {
     items.push({ label: 'Work authorization', present: job.hasWorkAuth });
   }
   return items;

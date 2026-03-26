@@ -39,8 +39,8 @@ export default function JobCard({ scoredJob }: { scoredJob: ScoredJob }) {
   const upsellCount = upsellItems.filter(i => i.flagged).length;
 
   const statusColors: Record<string, string> = {
-    'No Dates': 'bg-slate-600', 'Received': 'bg-blue-600', 'Inspected': 'bg-cyan-600',
-    'Pending': 'bg-yellow-600', 'Approved': 'bg-orange-600', 'WIP': 'bg-green-600', 'Completed': 'bg-emerald-600',
+    'Received': 'bg-blue-600', 'Scoped': 'bg-amber-600', 'Sales': 'bg-purple-600',
+    'WIP': 'bg-orange-600', 'Completed': 'bg-green-600',
   };
   const typeColors: Record<string, string> = {
     'WTR': 'text-blue-300', 'MLD': 'text-purple-300', 'STR': 'text-orange-300', 'FIR': 'text-red-300',

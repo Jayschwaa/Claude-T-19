@@ -1,6 +1,6 @@
 // Job types
 export type JobType = 'WTR' | 'MLD' | 'STR' | 'FIR' | 'BIO' | 'CNTNT' | 'DUCT' | 'RECON' | 'OTHER';
-export type WorkflowStatus = 'No Dates' | 'Received' | 'Inspected' | 'Pending' | 'Approved' | 'WIP' | 'Completed';
+export type WorkflowStatus = 'Received' | 'Scoped' | 'Sales' | 'WIP' | 'Completed';
 
 export interface JobNote {
   date: string;

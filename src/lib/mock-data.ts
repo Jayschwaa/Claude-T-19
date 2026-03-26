@@ -134,20 +134,20 @@ function generateEstimateAmount(): number {
 
 // Realistic notes templates for restoration work
 const noteTemplates = [
-  // No Dates / Received
+  // Received
   'Initial call received. Customer reporting water intrusion in living room from ceiling. Need to schedule inspection.',
   'Lead intake - potential water loss, customer requesting emergency response. Calling now.',
   'Message left with customer. Leak detected under kitchen sink, drywall potentially saturated.',
   'Estimated 2 rooms affected. Customer home available for inspection tomorrow morning.',
 
-  // Inspected
+  // Scoped
   'Initial inspection - 3 rooms affected (kitchen, master bath, hallway). Water from upstairs unit overflow. Recommend immediate dehumidification.',
   'Walkthrough complete. Subfloor wet in 600 sq ft area. Baseboards need removal. Customer present, very concerned.',
   'Moisture readings taken: ambient 85%, wall cavity 94%. Set up containment and 4 dehumidifiers.',
   'Visible mold in drywall cavity. Structural integrity appears intact. Full demo needed for affected area.',
   'Photo documentation completed. Sent 18 images to insurance. Waiting on adjuster assignment.',
 
-  // Pending / Awaiting Approval
+  // Sales / Awaiting Approval
   'Estimate prepared - $12,500 for water extraction, drying, demo, rebuild. Sent to Heritage yesterday.',
   'Called adjuster Mark B. at Citizens, left VM requesting approval meeting. This one is time-sensitive.',
   'Estimate reviewed with adjuster via phone. Approved scope but waiting on formal authorization.',
@@ -183,20 +183,14 @@ function generateNotesForStatus(status: WorkflowStatus, customerName: string, jo
   let noteCount = 0;
 
   switch (status) {
-    case 'No Dates':
-      noteCount = randomInt(0, 1);
-      break;
     case 'Received':
-      noteCount = randomInt(1, 2);
+      noteCount = randomInt(0, 2);
       break;
-    case 'Inspected':
+    case 'Scoped':
       noteCount = randomInt(2, 4);
       break;
-    case 'Pending':
-      noteCount = randomInt(2, 5);
-      break;
-    case 'Approved':
-      noteCount = randomInt(3, 6);
+    case 'Sales':
+      noteCount = randomInt(2, 6);
       break;
     case 'WIP':
       noteCount = randomInt(4, 10);
@@ -240,31 +234,19 @@ function generateIICRCCompliance(status: WorkflowStatus): {
   let dryStandard = false;
   let sourceDocumented = false;
 
-  if (status === 'No Dates') {
-    // Almost nothing
-    return { hasMoistureReadings: false, hasDryingLogs: false, hasEquipmentPlacement: false, hasDailyMonitoring: false, hasDryStandard: false, hasSourceDocumented: false };
-  }
-
   if (status === 'Received') {
     sourceDocumented = rng() > 0.6;
     return { hasMoistureReadings: false, hasDryingLogs: false, hasEquipmentPlacement: false, hasDailyMonitoring: false, hasDryStandard: false, hasSourceDocumented: sourceDocumented };
   }
 
-  if (status === 'Inspected') {
+  if (status === 'Scoped') {
     moistureReadings = rng() > 0.2;
     sourceDocumented = rng() > 0.3;
     equipmentPlacement = rng() > 0.6;
     return { hasMoistureReadings: moistureReadings, hasDryingLogs: false, hasEquipmentPlacement: equipmentPlacement, hasDailyMonitoring: false, hasDryStandard: false, hasSourceDocumented: sourceDocumented };
   }
 
-  if (status === 'Pending') {
-    moistureReadings = rng() > 0.1;
-    sourceDocumented = rng() > 0.2;
-    equipmentPlacement = rng() > 0.4;
-    return { hasMoistureReadings: moistureReadings, hasDryingLogs: false, hasEquipmentPlacement: equipmentPlacement, hasDailyMonitoring: false, hasDryStandard: false, hasSourceDocumented: sourceDocumented };
-  }
-
-  if (status === 'Approved') {
+  if (status === 'Sales') {
     moistureReadings = rng() > 0.05;
     sourceDocumented = rng() > 0.15;
     equipmentPlacement = rng() > 0.2;
@@ -305,7 +287,7 @@ function generateTicketCompleteness(status: WorkflowStatus): {
   const hasAdjusterContact = rng() > 0.25; // ~75%
   const hasClaimNumber = rng() > 0.20;    // ~80%
   const hasPhoneNumber = rng() > 0.10;    // ~90%
-  const hasScopeOfWork = status !== 'No Dates' && rng() > 0.4; // increases with status
+  const hasScopeOfWork = status !== 'Received' && rng() > 0.4; // increases with status
 
   return { hasInsuranceInfo, hasAdjusterContact, hasClaimNumber, hasPhoneNumber, hasScopeOfWork };
 }
@@ -323,12 +305,12 @@ function generateUpsells(status: WorkflowStatus, jobType: JobType, estimateAmoun
   let hasSourceSolution = false;
 
   // Contents job: ~60% of WTR/MLD jobs lack it (40% have)
-  if ((jobType === 'WTR' || jobType === 'MLD') && status !== 'No Dates' && status !== 'Received') {
+  if ((jobType === 'WTR' || jobType === 'MLD') && status !== 'Received') {
     hasContentsJob = rng() > 0.6;
   }
 
   // Recon estimate: ~60% of jobs over $15k lack it
-  if (estimateAmount > 15000 && status !== 'No Dates' && status !== 'Received' && status !== 'Inspected') {
+  if (estimateAmount > 15000 && status !== 'Received' && status !== 'Scoped') {
     hasReconEstimate = rng() > 0.6;
   }
 
@@ -338,7 +320,7 @@ function generateUpsells(status: WorkflowStatus, jobType: JobType, estimateAmoun
   }
 
   // Source solution: ~50% of jobs lack it
-  if (status !== 'No Dates') {
+  if (status !== 'Received') {
     hasSourceSolution = rng() > 0.5;
   }
 
@@ -351,11 +333,9 @@ export function generateMockJobs(): Job[] {
 
   // Exact status distribution for 85 jobs
   const statusDistribution: Record<WorkflowStatus, number> = {
-    'No Dates': 3,
-    'Received': 5,
-    'Inspected': 8,
-    'Pending': 22,
-    'Approved': 12,
+    'Received': 8,
+    'Scoped': 8,
+    'Sales': 34,
     'WIP': 25,
     'Completed': 10,
   };
@@ -369,7 +349,7 @@ export function generateMockJobs(): Job[] {
   for (let i = 0; i < 4; i++) jobTypeArray.push(randomElement(['BIO', 'CNTNT', 'DUCT', 'RECON'])); // 5%
 
   let jobIndex = 0;
-  const statusList: WorkflowStatus[] = ['No Dates', 'Received', 'Inspected', 'Pending', 'Approved', 'WIP', 'Completed'];
+  const statusList: WorkflowStatus[] = ['Received', 'Scoped', 'Sales', 'WIP', 'Completed'];
 
   for (const status of statusList) {
     const count = statusDistribution[status];
@@ -389,20 +369,14 @@ export function generateMockJobs(): Job[] {
       let daysOld: number;
 
       switch (status) {
-        case 'No Dates':
-          daysOld = randomInt(0, 3);
-          break;
         case 'Received':
-          daysOld = randomInt(1, 7);
+          daysOld = randomInt(0, 7);
           break;
-        case 'Inspected':
+        case 'Scoped':
           daysOld = randomInt(5, 20);
           break;
-        case 'Pending':
+        case 'Sales':
           daysOld = randomInt(10, 90);
-          break;
-        case 'Approved':
-          daysOld = randomInt(14, 45);
           break;
         case 'WIP':
           daysOld = randomInt(20, 120);
@@ -423,20 +397,20 @@ export function generateMockJobs(): Job[] {
       let estimateAmount = 0;
       let supplementAmount = 0;
 
-      if (status !== 'No Dates') {
+      if (status !== 'Received') {
         receivedDate = addDays(openedDate, randomInt(0, 5));
       }
 
-      if (status !== 'No Dates' && status !== 'Received') {
+      if (status !== 'Received' && status !== 'Scoped') {
         inspectedDate = addDays(receivedDate || openedDate, randomInt(1, 8));
       }
 
-      if (status === 'Pending' || status === 'Approved' || status === 'WIP' || status === 'Completed') {
+      if (status === 'Sales' || status === 'WIP' || status === 'Completed') {
         estimateAmount = generateEstimateAmount();
         estimateSentDate = addDays(inspectedDate || openedDate, randomInt(1, 10));
       }
 
-      if (status === 'Approved' || status === 'WIP' || status === 'Completed') {
+      if (status === 'Sales' || status === 'WIP' || status === 'Completed') {
         approvedDate = addDays(estimateSentDate || openedDate, randomInt(2, 30));
       }
 
@@ -467,18 +441,18 @@ export function generateMockJobs(): Job[] {
         }
       }
 
-      const hasPhotos = status !== 'No Dates' && rng() > 0.3; // ~70%
-      const hasEstimate = (status === 'Pending' || status === 'Approved' || status === 'WIP' || status === 'Completed') ||
-                          (status === 'Inspected' && rng() > 0.5);
-      const hasWorkAuth = (status === 'WIP' || status === 'Completed') || (status === 'Approved' && rng() > 0.4);
+      const hasPhotos = status !== 'Received' && rng() > 0.3; // ~70%
+      const hasEstimate = (status === 'Sales' || status === 'WIP' || status === 'Completed') ||
+                          (status === 'Scoped' && rng() > 0.5);
+      const hasWorkAuth = (status === 'WIP' || status === 'Completed') || (status === 'Sales' && rng() > 0.4);
 
       const iicrc = generateIICRCCompliance(status);
       const ticketInfo = generateTicketCompleteness(status);
       const upsells = generateUpsells(status, jobType, estimateAmount);
 
       const photoCount = hasPhotos ? randomInt(
-        status === 'Completed' ? 15 : status === 'WIP' ? 8 : status === 'Approved' ? 6 : 3,
-        status === 'Completed' ? 45 : status === 'WIP' ? 20 : status === 'Approved' ? 15 : 10
+        status === 'Completed' ? 15 : status === 'WIP' ? 8 : status === 'Sales' ? 6 : 3,
+        status === 'Completed' ? 45 : status === 'WIP' ? 20 : status === 'Sales' ? 15 : 10
       ) : 0;
 
       const notes = generateNotesForStatus(status, customerName, jobType);

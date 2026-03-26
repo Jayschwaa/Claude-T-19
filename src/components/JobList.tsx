@@ -19,7 +19,7 @@ export default function JobList({ scoredJobs, summary, viewMode, statusFromBar }
   const [flagFilter, setFlagFilter] = useState<string>('all');
   const [personFilter, setPersonFilter] = useState<string>('all');
 
-  const statuses: WorkflowStatus[] = ['No Dates', 'Received', 'Inspected', 'Pending', 'Approved', 'WIP', 'Completed'];
+  const statuses: WorkflowStatus[] = ['Received', 'Scoped', 'Sales', 'WIP', 'Completed'];
   const types: JobType[] = ['WTR', 'MLD', 'STR', 'FIR'];
 
   // Build person list

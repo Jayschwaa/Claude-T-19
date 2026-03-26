@@ -13,14 +13,14 @@ interface Props {
 
 export default function SummaryBar({ summary, activeView, activeStatus, onBoxClick, onStatusClick }: Props) {
   const fmt = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
-  const statusOrder = ['No Dates', 'Received', 'Inspected', 'Pending', 'Approved', 'WIP', 'Completed'];
+  const statusOrder = ['Received', 'Scoped', 'Sales', 'WIP', 'Completed'];
   const statusColors: Record<string, string> = {
-    'No Dates': 'bg-slate-500', 'Received': 'bg-blue-500', 'Inspected': 'bg-cyan-500',
-    'Pending': 'bg-yellow-500', 'Approved': 'bg-orange-500', 'WIP': 'bg-green-500', 'Completed': 'bg-emerald-400',
+    'Received': 'bg-blue-500', 'Scoped': 'bg-amber-500', 'Sales': 'bg-purple-500',
+    'WIP': 'bg-orange-500', 'Completed': 'bg-green-500',
   };
   const statusRingColors: Record<string, string> = {
-    'No Dates': 'ring-slate-500', 'Received': 'ring-blue-500', 'Inspected': 'ring-cyan-500',
-    'Pending': 'ring-yellow-500', 'Approved': 'ring-orange-500', 'WIP': 'ring-green-500', 'Completed': 'ring-emerald-400',
+    'Received': 'ring-blue-500', 'Scoped': 'ring-amber-500', 'Sales': 'ring-purple-500',
+    'WIP': 'ring-orange-500', 'Completed': 'ring-green-500',
   };
 
   function boxClass(mode: ViewMode, borderColor: string): string {

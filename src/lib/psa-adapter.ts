@@ -223,13 +223,11 @@ function mapJobTypeCode(code: string): JobType {
 
 function mapStatus(psaStatus: string): WorkflowStatus {
   const s = (psaStatus || '').toLowerCase().trim();
-  if (!s || s === 'new' || s.includes('no date')) return 'No Dates';
-  if (s.includes('receiv') || s.includes('intake') || s === 'open') return 'Received';
-  if (s.includes('inspect') || s.includes('assess') || s.includes('scope')) return 'Inspected';
-  if (s.includes('pending') || s.includes('estimat') || s.includes('waiting') || s.includes('submitted')) return 'Pending';
-  if (s.includes('approv')) return 'Approved';
-  if (s.includes('wip') || s.includes('work in') || s.includes('active') || s.includes('production') || s.includes('in progress')) return 'WIP';
   if (s.includes('complet') || s.includes('closed') || s.includes('done') || s.includes('invoic')) return 'Completed';
+  if (s.includes('wip') || s.includes('work in') || s.includes('active') || s.includes('production') || s.includes('in progress')) return 'WIP';
+  if (s.includes('approv') || s.includes('pending') || s.includes('estimat') || s.includes('waiting') || s.includes('submitted')) return 'Sales';
+  if (s.includes('inspect') || s.includes('assess') || s.includes('scope')) return 'Scoped';
+  if (s.includes('receiv') || s.includes('intake') || s === 'open' || !s || s === 'new' || s.includes('no date')) return 'Received';
   return 'Received';
 }
 
@@ -705,7 +703,7 @@ async function enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> 
   const altStatus = (detail?.alt_status || '').toLowerCase();
   const altStatusIndicatesCompleted = altStatus.includes('paid') || altStatus.includes('collections') ||
     altStatus.includes('closed') || altStatus.includes('write off') || altStatus.includes('invoiced');
-  const altStatusIndicatesPending = altStatus.includes('submitted') || altStatus.includes('review') ||
+  const altStatusIndicatesSales = altStatus.includes('submitted') || altStatus.includes('review') ||
     altStatus.includes('negotiat') || altStatus.includes('in process');
   const altStatusIndicatesWIP = altStatus.includes('appointment') || altStatus.includes('hold');
 
@@ -713,12 +711,10 @@ async function enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> 
     status = 'Completed';
   } else if (productionStartDate) {
     status = 'WIP';
-  } else if (approvedDate) {
-    status = 'Approved';
-  } else if (estimateSentDate || altStatusIndicatesPending) {
-    status = 'Pending';
+  } else if (approvedDate || estimateSentDate || altStatusIndicatesSales) {
+    status = 'Sales';
   } else if (inspectedDate) {
-    status = 'Inspected';
+    status = 'Scoped';
   } else if (receivedDate || openedDate) {
     // Check if notes or alt_status suggest work is in progress
     if (altStatusIndicatesWIP) {
@@ -729,7 +725,7 @@ async function enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> 
       status = 'Received';
     }
   } else {
-    status = 'No Dates';
+    status = 'Received';
   }
 
   console.log(`[PSA] Job ${raw.job_number}: dates=[${Object.keys(dates).join(',')}] alt="${detail?.alt_status || ''}" → status="${status}"`);
