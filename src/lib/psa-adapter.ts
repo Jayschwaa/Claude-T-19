@@ -585,7 +585,10 @@ async function fetchJobFinancial(jobId: number): Promise<PSAFinancial> {
     }
   }
 
-  console.log(`[PSA] Financial: rev_est=${financial.revenue_estimate}, rev_act=${financial.revenue_actual}, cost_est=${financial.cost_estimate}`);
+  // Debug: log financial parsing details
+  const revenueTokenIdx = tokens.findIndex(t => t === 'Revenue');
+  const revenueContext = revenueTokenIdx >= 0 ? tokens.slice(revenueTokenIdx, revenueTokenIdx + 8).join(' | ') : 'Revenue token not found';
+  console.log(`[PSA] Financial: rev_est=${financial.revenue_estimate}, rev_act=${financial.revenue_actual} | html=${html.length}chars | tokens=${tokens.length} | revCtx=[${revenueContext}]`);
   return financial;
 }
 
@@ -878,16 +881,14 @@ async function fetchT19Jobs(): Promise<Job[]> {
   const allJobs = await fetchAllOpenJobs(100);
   console.log(`[PSA] Total open jobs: ${allJobs.length}`);
 
-  // Filter to T-19, recent years only (matching MyClaw's approach: year 25 or 26)
-  // The WIP report only contains year-26 jobs — old jobs from 2017-2024 are not active
-  const RECENT_YEARS = new Set(['25', '26']);
+  // Filter to T-19, current year only — the WIP report only has year-26 jobs
   const t19 = allJobs.filter(j => {
     if (j.territory !== '19') return false;
-    if (!RECENT_YEARS.has(j.year)) return false;
+    if (j.year !== '26') return false;
     return true;
   });
 
-  console.log(`[PSA] T-19 recent jobs (year 25/26): ${t19.length}`);
+  console.log(`[PSA] T-19 year-26 jobs: ${t19.length}`);
 
   const allJobNumbers = allJobs.map(j => j.job_number);
 
