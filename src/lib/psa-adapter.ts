@@ -540,26 +540,47 @@ async function fetchJobFinancial(jobId: number): Promise<PSAFinancial> {
     }
   }
 
-  // Also try parsing table for Invoiced/Paid/Outstanding
+  // Parse financial table — matching MyClaw's Python approach
+  // The table has rows like: Revenue | $12,561.00 | $12,561.00  (actual | estimate)
   const clean = html.replace(/<script[^>]*>.*?<\/script>/gs, '').replace(/<[^>]+>/g, '\t');
   const tokens = clean.split('\t').map(t => t.trim()).filter(Boolean);
 
-  const labels = ['Invoiced', 'Paid', 'Outstanding'];
+  const financialLabels = ['Material', 'Labor', 'Subtrade', 'Equipment', 'Expense',
+    'Revenue Overhead', 'Cost', 'Revenue', 'Profit', 'Gross Margin',
+    'Invoiced', 'Paid', 'Outstanding'];
+
   for (let i = 0; i < tokens.length; i++) {
-    if (labels.includes(tokens[i])) {
-      // Look for dollar amount right after
-      for (let j = 1; j <= 3; j++) {
-        if (i + j < tokens.length) {
-          const dollarMatch = tokens[i + j].match(/\$?([\d,]+\.?\d*)/);
-          if (dollarMatch) {
-            const val = parseFloat(dollarMatch[1].replace(/,/g, '')) || 0;
-            const key = tokens[i].toLowerCase() as keyof PSAFinancial;
-            if (key in financial) {
-              financial[key] = val;
-            }
-            break;
+    if (financialLabels.includes(tokens[i])) {
+      const amounts: number[] = [];
+      for (let j = 1; j <= 5; j++) {
+        if (i + j >= tokens.length) break;
+        const next = tokens[i + j];
+        // Stop if we hit another label or header
+        if (financialLabels.includes(next) || next === 'Totals' || next === 'Actual' || next === 'Estimate') break;
+        // Extract dollar values (handle negative with parens)
+        const dollarVals = next.match(/\(?\$?[\d,]+\.?\d*\)?%?/g) || [];
+        for (const dv of dollarVals) {
+          const cleaned = dv.replace(/\$/g, '').replace(/,/g, '').replace('(', '-').replace(')', '').replace('%', '').trim();
+          if (cleaned) {
+            const n = parseFloat(cleaned);
+            if (!isNaN(n)) amounts.push(n);
           }
         }
+      }
+      const label = tokens[i].toLowerCase().replace(/ /g, '_');
+      // First amount = actual, second = estimate (matching Python's MyClaw)
+      if (label === 'revenue') {
+        if (amounts.length >= 1 && !financial.revenue_actual) financial.revenue_actual = amounts[0];
+        if (amounts.length >= 2 && !financial.revenue_estimate) financial.revenue_estimate = amounts[1];
+      } else if (label === 'cost') {
+        if (amounts.length >= 1 && !financial.cost_actual) financial.cost_actual = amounts[0];
+        if (amounts.length >= 2 && !financial.cost_estimate) financial.cost_estimate = amounts[1];
+      } else if (label === 'invoiced' && amounts.length >= 1) {
+        financial.invoiced = amounts[0];
+      } else if (label === 'paid' && amounts.length >= 1) {
+        financial.paid = amounts[0];
+      } else if (label === 'outstanding' && amounts.length >= 1) {
+        financial.outstanding = amounts[0];
       }
     }
   }
@@ -677,7 +698,9 @@ async function enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> 
     if (d.includes('inspect') || d.includes('assess') || d.includes('scope')) {
       inspectedDate = inspectedDate || parseDateStr(val);
     }
-    if ((d.includes('estimate') && d.includes('sent')) || d.includes('submitted')) {
+    if ((d.includes('estimate') && d.includes('sent')) || d.includes('submitted') ||
+        (d.includes('complet') && d.includes('estimate')) || d === 'esn submitted') {
+      // "Completed Estimate" = estimate is finalized, "ESN Submitted" = estimate sent
       estimateSentDate = estimateSentDate || parseDateStr(val);
     }
     if (d.includes('approv')) {
@@ -689,13 +712,13 @@ async function enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> 
         d.includes('mitigation start') || (d.includes('start') && !d.includes('restart') && !d.includes('estimate'))) {
       productionStartDate = productionStartDate || parseDateStr(val);
     }
-    // Job completion — ONLY match if it's the full job being completed, not a sub-task
-    // "Job Completed", "Completion Date", "Close Out", "Job Closed" → yes
-    // "Mitigation Completed", "Phase Complete", "Clearance Completed", "Demo Completed" → no
+    // Job completion — ONLY match "Actual Completion", "Job Completed", "Close Out"
+    // Exclude: "Completed Estimate" (estimate done), "Mitigation Completed", "Phase Complete", etc.
     const isFullJobComplete = (
       (d.includes('complet') || d.includes('finish')) &&
       !d.includes('mitig') && !d.includes('phase') && !d.includes('clear') &&
-      !d.includes('demo') && !d.includes('drying') && !d.includes('pack')
+      !d.includes('demo') && !d.includes('drying') && !d.includes('pack') &&
+      !d.includes('estimate')
     ) || d.includes('close out') || d.includes('job close') || d.includes('final close');
     if (isFullJobComplete) {
       completedDate = completedDate || parseDateStr(val);
@@ -887,8 +910,27 @@ async function fetchT19Jobs(): Promise<Job[]> {
     console.log(`[PSA] Enriched ${Math.min(i + batchSize, t19.length)}/${t19.length}`);
   }
 
-  console.log(`[PSA] Final job count: ${enriched.length}`);
-  return enriched;
+  // Post-enrich filter: exclude jobs that are truly completed (have completion date + are old)
+  // The WIP report only shows active/in-progress jobs. Jobs with "Completed" status that also have
+  // an actual completion date AND were opened more than 90 days ago are considered done.
+  // This keeps recently-completed jobs visible (last 90 days) while hiding old finished ones.
+  const now = Date.now();
+  const NINETY_DAYS = 90 * 24 * 60 * 60 * 1000;
+  const active = enriched.filter(j => {
+    if (j.status === 'Completed' && j.completedDate) {
+      const openedMs = new Date(j.openedDate).getTime();
+      const age = now - openedMs;
+      // If job is older than 90 days AND marked completed, exclude it
+      if (age > NINETY_DAYS) {
+        console.log(`[PSA] Excluding old completed job: ${j.jobNumber} (${j.customerName}) opened ${j.openedDate}`);
+        return false;
+      }
+    }
+    return true;
+  });
+
+  console.log(`[PSA] After filter: ${active.length} active jobs (excluded ${enriched.length - active.length} old completed)`);
+  return active;
 }
 
 // ─── Adapter Class ───────────────────────────────────────────────────────────
