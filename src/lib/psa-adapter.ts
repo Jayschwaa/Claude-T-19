@@ -1,11 +1,8 @@
 import { DataAdapter, Job, JobType, WorkflowStatus, JobNote, JobContact } from './types';
+import { PSALocationConfig } from './psa-config';
 
-// ─── PSA Configuration ───────────────────────────────────────────────────────
+// ─── Global Configuration ────────────────────────────────────────────────────
 
-const PSA_BASE = process.env.PSA_BASE_URL || 'https://uwrg.psarcweb.com/PSAWeb';
-const PSA_SCHEMA = process.env.PSA_SCHEMA || '1022';
-const PSA_USER = process.env.PSA_USERNAME || '';
-const PSA_PASS = process.env.PSA_PASSWORD || '';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 // Disable SSL verification to match MyClaw's Python approach
@@ -14,202 +11,765 @@ if (typeof process !== 'undefined') {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 }
 
-// ─── Cookie-based Session Management ─────────────────────────────────────────
+// ─── PSA Session Class ───────────────────────────────────────────────────────
 
-let sessionCookies: string[] = [];
-let sessionExpires = 0;
-const SESSION_TTL = 25 * 60 * 1000; // 25 minutes
+class PSASession {
+  private config: PSALocationConfig;
+  private sessionCookies: string[] = [];
+  private sessionExpires = 0;
+  private readonly SESSION_TTL = 25 * 60 * 1000; // 25 minutes
 
-function getCookieHeader(): string {
-  return sessionCookies.join('; ');
-}
+  constructor(config: PSALocationConfig) {
+    this.config = config;
+  }
 
-function extractSetCookies(headers: Headers): void {
-  // Try getSetCookie() first (Node 20+), fall back to get('set-cookie') for Node 18
-  let setCookieValues: string[] = [];
+  private getCookieHeader(): string {
+    return this.sessionCookies.join('; ');
+  }
 
-  if (typeof headers.getSetCookie === 'function') {
-    setCookieValues = headers.getSetCookie();
-  } else {
-    // Node 18 fallback: get('set-cookie') returns all values joined by ', '
-    // We need to split carefully since cookie values can contain commas in expires
-    const raw = headers.get('set-cookie');
-    if (raw) {
-      // Split on ', ' followed by a cookie name pattern (word=)
-      setCookieValues = raw.split(/,\s*(?=[A-Za-z_][A-Za-z0-9_]*=)/);
+  private extractSetCookies(headers: Headers): void {
+    // Try getSetCookie() first (Node 20+), fall back to get('set-cookie') for Node 18
+    let setCookieValues: string[] = [];
+
+    if (typeof headers.getSetCookie === 'function') {
+      setCookieValues = headers.getSetCookie();
+    } else {
+      // Node 18 fallback: get('set-cookie') returns all values joined by ', '
+      // We need to split carefully since cookie values can contain commas in expires
+      const raw = headers.get('set-cookie');
+      if (raw) {
+        // Split on ', ' followed by a cookie name pattern (word=)
+        setCookieValues = raw.split(/,\s*(?=[A-Za-z_][A-Za-z0-9_]*=)/);
+      }
+    }
+
+    for (const sc of setCookieValues) {
+      const nameVal = sc.split(';')[0].trim();
+      if (!nameVal || !nameVal.includes('=')) continue;
+      const name = nameVal.split('=')[0];
+      // Replace existing cookie with same name, or add new
+      this.sessionCookies = this.sessionCookies.filter(c => !c.startsWith(name + '='));
+      this.sessionCookies.push(nameVal);
+    }
+
+    if (setCookieValues.length > 0) {
+      console.log(`[PSA:${this.config.id}] Extracted ${setCookieValues.length} cookies. Total: ${this.sessionCookies.length}`);
     }
   }
 
-  for (const sc of setCookieValues) {
-    const nameVal = sc.split(';')[0].trim();
-    if (!nameVal || !nameVal.includes('=')) continue;
-    const name = nameVal.split('=')[0];
-    // Replace existing cookie with same name, or add new
-    sessionCookies = sessionCookies.filter(c => !c.startsWith(name + '='));
-    sessionCookies.push(nameVal);
-  }
-
-  if (setCookieValues.length > 0) {
-    console.log(`[PSA] Extracted ${setCookieValues.length} cookies. Total: ${sessionCookies.length}`);
-  }
-}
-
-async function login(): Promise<void> {
-  // Return if session is still valid
-  if (sessionCookies.length > 0 && Date.now() < sessionExpires) {
-    return;
-  }
-
-  // Reset cookies
-  sessionCookies = [];
-
-  console.log('[PSA] Logging in...');
-
-  // Step 1: POST to /Account/Login with form data
-  const loginBody = new URLSearchParams({
-    Username: PSA_USER,
-    Password: PSA_PASS,
-    Schema: PSA_SCHEMA,
-  });
-
-  const loginRes = await fetch(`${PSA_BASE}/Account/Login`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'User-Agent': UA,
-    },
-    body: loginBody.toString(),
-    redirect: 'manual', // Don't follow redirects automatically
-  });
-
-  // Capture cookies from login response
-  extractSetCookies(loginRes.headers);
-
-  let transferUrl = '';
-
-  if (loginRes.status === 302) {
-    // Got a redirect — the Location header has the transfer URL
-    transferUrl = loginRes.headers.get('Location') || '';
-    if (transferUrl && !transferUrl.startsWith('http')) {
-      transferUrl = `https://uwrg.psarcweb.com${transferUrl}`;
+  async login(): Promise<void> {
+    // Return if session is still valid
+    if (this.sessionCookies.length > 0 && Date.now() < this.sessionExpires) {
+      return;
     }
-  } else {
-    // Check if the response body contains a Transfer URL
-    const body = await loginRes.text();
-    const match = body.match(/href="([^"]*Transfer\?Token=[^"]*)"/);
-    if (match) {
-      transferUrl = match[1];
-      if (!transferUrl.startsWith('http')) {
+
+    // Reset cookies
+    this.sessionCookies = [];
+
+    console.log(`[PSA:${this.config.id}] Logging in...`);
+
+    // Step 1: POST to /Account/Login with form data
+    const loginBody = new URLSearchParams({
+      Username: this.config.username,
+      Password: this.config.password,
+      Schema: this.config.schema,
+    });
+
+    const loginRes = await fetch(`${this.config.baseUrl}/Account/Login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': UA,
+      },
+      body: loginBody.toString(),
+      redirect: 'manual',
+    });
+
+    // Capture cookies from login response
+    this.extractSetCookies(loginRes.headers);
+
+    let transferUrl = '';
+
+    if (loginRes.status === 302) {
+      // Got a redirect — the Location header has the transfer URL
+      transferUrl = loginRes.headers.get('Location') || '';
+      if (transferUrl && !transferUrl.startsWith('http')) {
         transferUrl = `https://uwrg.psarcweb.com${transferUrl}`;
       }
-    } else if (loginRes.ok) {
-      // Login may have succeeded directly
-      console.log('[PSA] Login succeeded directly (no transfer needed)');
-      sessionExpires = Date.now() + SESSION_TTL;
-      return;
     } else {
-      throw new Error(`PSA login failed: ${loginRes.status} ${loginRes.statusText}`);
+      // Check if the response body contains a Transfer URL
+      const body = await loginRes.text();
+      const match = body.match(/href="([^"]*Transfer\?Token=[^"]*)"/);
+      if (match) {
+        transferUrl = match[1];
+        if (!transferUrl.startsWith('http')) {
+          transferUrl = `https://uwrg.psarcweb.com${transferUrl}`;
+        }
+      } else if (loginRes.ok) {
+        // Login may have succeeded directly
+        console.log(`[PSA:${this.config.id}] Login succeeded directly (no transfer needed)`);
+        this.sessionExpires = Date.now() + this.SESSION_TTL;
+        return;
+      } else {
+        throw new Error(`PSA login failed: ${loginRes.status} ${loginRes.statusText}`);
+      }
     }
+
+    // Step 2: POST to the transfer URL
+    if (transferUrl) {
+      try {
+        const transferRes = await fetch(transferUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Length': '0',
+            'User-Agent': UA,
+            'Cookie': this.getCookieHeader(),
+          },
+          redirect: 'manual',
+        });
+        this.extractSetCookies(transferRes.headers);
+
+        // Follow any additional redirects
+        if (transferRes.status === 302) {
+          const nextUrl = transferRes.headers.get('Location');
+          if (nextUrl) {
+            const fullUrl = nextUrl.startsWith('http') ? nextUrl : `https://uwrg.psarcweb.com${nextUrl}`;
+            const followRes = await fetch(fullUrl, {
+              headers: { 'User-Agent': UA, 'Cookie': this.getCookieHeader() },
+              redirect: 'manual',
+            });
+            this.extractSetCookies(followRes.headers);
+          }
+        }
+      } catch {
+        // 302 redirect is expected and OK
+      }
+    }
+
+    this.sessionExpires = Date.now() + this.SESSION_TTL;
+    console.log(`[PSA:${this.config.id}] Login successful. Cookies: ${this.sessionCookies.length}: ${this.sessionCookies.map(c => c.split('=')[0]).join(', ')}`);
   }
 
-  // Step 2: POST to the transfer URL
-  if (transferUrl) {
-    try {
-      const transferRes = await fetch(transferUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Length': '0',
-          'User-Agent': UA,
-          'Cookie': getCookieHeader(),
-        },
-        redirect: 'manual',
+  async psaGet(url: string): Promise<string> {
+    await this.login();
+    const fullUrl = url.startsWith('http') ? url : `${this.config.baseUrl}${url}`;
+    const res = await fetch(fullUrl, {
+      headers: {
+        'User-Agent': UA,
+        'Cookie': this.getCookieHeader(),
+        'Accept': 'text/html,application/json',
+      },
+    });
+    this.extractSetCookies(res.headers);
+    if (!res.ok) {
+      throw new Error(`PSA GET ${res.status}: ${res.statusText} for ${fullUrl}`);
+    }
+    // Check if we got redirected to login page
+    const text = await res.text();
+    const isActualLoginPage = text.includes('id="Password"') && text.includes('/Account/Login') && !text.includes('Entity_AlternativeStatusID') && text.length < 50000;
+    if (isActualLoginPage) {
+      console.warn(`[PSA:${this.config.id}] Got login page for GET ${url} — session may have expired`);
+      // Reset session and retry once
+      this.sessionCookies = [];
+      this.sessionExpires = 0;
+      await this.login();
+      const retry = await fetch(fullUrl, {
+        headers: { 'User-Agent': UA, 'Cookie': this.getCookieHeader(), 'Accept': 'text/html,application/json' },
       });
-      extractSetCookies(transferRes.headers);
+      this.extractSetCookies(retry.headers);
+      if (!retry.ok) throw new Error(`PSA GET retry ${retry.status}: ${retry.statusText}`);
+      return retry.text();
+    }
+    return text;
+  }
 
-      // Follow any additional redirects
-      if (transferRes.status === 302) {
-        const nextUrl = transferRes.headers.get('Location');
-        if (nextUrl) {
-          const fullUrl = nextUrl.startsWith('http') ? nextUrl : `https://uwrg.psarcweb.com${nextUrl}`;
-          const followRes = await fetch(fullUrl, {
-            headers: { 'User-Agent': UA, 'Cookie': getCookieHeader() },
-            redirect: 'manual',
-          });
-          extractSetCookies(followRes.headers);
+  async psaPost(url: string, data: Record<string, string | number>): Promise<string> {
+    await this.login();
+    const fullUrl = url.startsWith('http') ? url : `${this.config.baseUrl}${url}`;
+    const body = new URLSearchParams();
+    for (const [k, v] of Object.entries(data)) {
+      body.append(k, String(v));
+    }
+    const res = await fetch(fullUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': UA,
+        'Cookie': this.getCookieHeader(),
+        'Accept': 'application/json',
+      },
+      body: body.toString(),
+    });
+    this.extractSetCookies(res.headers);
+    if (!res.ok) {
+      throw new Error(`PSA POST ${res.status}: ${res.statusText} for ${fullUrl}`);
+    }
+    return res.text();
+  }
+
+  // ─── Data Fetching Methods (use session's HTTP methods) ──────────────────
+
+  async fetchAllOpenJobs(pageSize = 100): Promise<PSARawJob[]> {
+    const allJobs: PSARawJob[] = [];
+    let offset = 0;
+    let total: number | null = null;
+
+    while (total === null || offset < total) {
+      const formData: Record<string, string | number> = {
+        option: 'Open',
+        iDisplayStart: offset,
+        iDisplayLength: pageSize,
+        sEcho: 1,
+        iColumns: 11,
+        iSortCol_0: 8,
+        sSortDir_0: 'desc',
+        iSortingCols: 1,
+        mDataProp_10: 'id',
+      };
+      for (let i = 0; i < 10; i++) {
+        formData[`mDataProp_${i}`] = `col${i}`;
+      }
+
+      const body = await this.psaPost('/Job/Job/ListFilter', formData);
+      const data = JSON.parse(body);
+      total = data.iTotalDisplayRecords;
+
+      for (const row of data.aaData) {
+        const job: PSARawJob = {
+          job_number: row[0],
+          client_name: row[1],
+          contact_name: row[2],
+          insurance_info: (row[3] || '').replace(/&nbsp;/g, '').trim(),
+          address: row[4],
+          state: row[5],
+          city: row[6],
+          assigned_to: row[7],
+          date: row[8],
+          status: row[9],
+          job_id: row[10],
+          territory: '',
+          year: '',
+          seq: '',
+          job_type_code: '',
+        };
+
+        // Parse job number: territory-year-seq-type
+        const parts = job.job_number.split('-');
+        if (parts.length >= 4) {
+          job.territory = parts[0];
+          job.year = parts[1];
+          job.seq = parts[2];
+          job.job_type_code = parts[3].split(';')[0];
+        }
+
+        allJobs.push(job);
+      }
+
+      offset += pageSize;
+      console.log(`[PSA:${this.config.id}] Fetched ${allJobs.length}/${total} jobs...`);
+    }
+
+    return allJobs;
+  }
+
+  async fetchJobDetail(jobId: number): Promise<PSAJobDetail> {
+    const html = await this.psaGet(`/Job/Job/Edit/${jobId}`);
+
+    const detail: PSAJobDetail = {
+      completeddisplay: 0,
+      revenuedisplay: 0,
+      deductible: 0,
+      job_type: '',
+      alt_status: '',
+      alt_status_id: '',
+      location: '',
+      team: '',
+      referrer: '',
+      projectManager: '',
+      estimator: '',
+      dates: {},
+      phones: [],
+      emails: [],
+      site_address1: '',
+      site_city: '',
+      site_region: '',
+      site_postalcode: '',
+    };
+
+    // Financial fields
+    const completedVal = extractInputValue(html, 'Entity_CompletedDisplay');
+    if (completedVal) detail.completeddisplay = parseFloat(completedVal) || 0;
+    const revenueVal = extractInputValue(html, 'Entity_RevenueDisplay');
+    if (revenueVal) detail.revenuedisplay = parseFloat(revenueVal) || 0;
+    const deductibleVal = extractInputValue(html, 'Entity_Deductible');
+    if (deductibleVal) detail.deductible = parseFloat(deductibleVal) || 0;
+
+    detail.job_type = extractSelectValue(html, 'Entity_JobTypeID');
+
+    // Alt status
+    const altSection = html.match(/id="Entity_AlternativeStatusID"[^>]*>([\s\S]*?)<\/select>/);
+    if (altSection) {
+      const sel = findSelectedOption(altSection[1]);
+      if (sel) {
+        detail.alt_status_id = sel.value;
+        detail.alt_status = sel.text;
+      }
+    }
+
+    // Location, team, referrer
+    detail.location = extractSelectValue(html, 'Entity_LocationID');
+    const teamSection = html.match(/name="Entity\.TeamID"[^>]*>(.*?)<\/select>/s);
+    if (teamSection) {
+      const selected = teamSection[1].match(/selected[^>]*>([^<]*)/);
+      if (selected) detail.team = selected[1].trim();
+    }
+    detail.referrer = extractSelectValue(html, 'Entity_ReferrerID');
+
+    detail.projectManager = extractSelectValue(html, 'Entity_ProjectManagerID');
+    detail.estimator = extractSelectValue(html, 'Entity_EstimatorID');
+    if (!detail.projectManager) detail.projectManager = extractSelectValue(html, 'Entity_PMID');
+    if (!detail.estimator) detail.estimator = extractSelectValue(html, 'Entity_SalesPersonID');
+
+    // Lifecycle dates
+    const dateDescs = html.matchAll(/JobDates\[(\d+)\]\.DateTypeDescription"[^>]*value="([^"]*)"/g);
+    const dateVals = html.matchAll(/(?:name="JobDates\[(\d+)\]\.DateTime"|id="JobDates_(\d+)__DateTime")[^>]*value="([^"]*)"/g);
+
+    const descMap: Record<string, string> = {};
+    for (const m of dateDescs) {
+      descMap[m[1]] = m[2];
+    }
+    const valMap: Record<string, string> = {};
+    for (const m of dateVals) {
+      const idx = m[1] || m[2];
+      valMap[idx] = m[3];
+    }
+    for (const [idx, desc] of Object.entries(descMap)) {
+      const val = valMap[idx];
+      if (val) {
+        detail.dates[desc] = val;
+      }
+    }
+
+    // Phones and emails
+    detail.phones = extractPhones(html);
+    detail.emails = extractEmails(html);
+
+    // Address
+    const addr1 = extractInputValue(html, 'Entity_rm_site_Address1');
+    if (addr1) detail.site_address1 = addr1;
+    const cityVal = extractInputValue(html, 'Entity_rm_site_City');
+    if (cityVal) detail.site_city = cityVal;
+    const regionVal = extractInputValue(html, 'Entity_rm_site_Region');
+    if (regionVal) detail.site_region = regionVal;
+    const postalVal = extractInputValue(html, 'Entity_rm_site_PostalCode');
+    if (postalVal) detail.site_postalcode = postalVal;
+
+    console.log(`[PSA:${this.config.id}] Detail for ${jobId}: alt_status="${detail.alt_status}", revenue=${detail.revenuedisplay}, dates=${Object.keys(detail.dates).length}, phones=${detail.phones.length}`);
+    return detail;
+  }
+
+  async fetchJobFinancial(jobId: number): Promise<PSAFinancial> {
+    const html = await this.psaGet(`/Job/Financial/List?linkID=${jobId}&UpdateTargetId=FinancialTab&Source=Job`);
+
+    const financial: PSAFinancial = {
+      revenue_estimate: 0,
+      revenue_actual: 0,
+      cost_estimate: 0,
+      cost_actual: 0,
+      invoiced: 0,
+      paid: 0,
+      outstanding: 0,
+    };
+
+    // Parse hidden input totals
+    const fieldMap: Record<string, keyof PSAFinancial> = {
+      'TotalCost.Actual': 'cost_actual',
+      'TotalCost.Estimate': 'cost_estimate',
+      'TotalRevenue.Actual': 'revenue_actual',
+      'TotalRevenue.Estimate': 'revenue_estimate',
+    };
+
+    for (const [name, key] of Object.entries(fieldMap)) {
+      const escapedName = name.replace(/\./g, '\\.');
+      const regex = new RegExp(`name="${escapedName}"[^>]*value="([^"]*)"`, 'i');
+      const match = html.match(regex);
+      if (match && match[1]) {
+        financial[key] = parseFloat(match[1]) || 0;
+      }
+    }
+
+    // Parse financial table
+    const clean = html.replace(/<script[^>]*>.*?<\/script>/gs, '').replace(/<[^>]+>/g, '\t');
+    const tokens = clean.split('\t').map(t => t.trim()).filter(Boolean);
+
+    const financialLabels = ['Material', 'Labor', 'Subtrade', 'Equipment', 'Expense',
+      'Revenue Overhead', 'Cost', 'Revenue', 'Profit', 'Gross Margin',
+      'Invoiced', 'Paid', 'Outstanding'];
+
+    for (let i = 0; i < tokens.length; i++) {
+      if (financialLabels.includes(tokens[i])) {
+        const amounts: number[] = [];
+        for (let j = 1; j <= 5; j++) {
+          if (i + j >= tokens.length) break;
+          const next = tokens[i + j];
+          if (financialLabels.includes(next) || next === 'Totals' || next === 'Actual' || next === 'Estimate') break;
+          const dollarVals = next.match(/\(?\$?[\d,]+\.?\d*\)?%?/g) || [];
+          for (const dv of dollarVals) {
+            const cleaned = dv.replace(/\$/g, '').replace(/,/g, '').replace('(', '-').replace(')', '').replace('%', '').trim();
+            if (cleaned) {
+              const n = parseFloat(cleaned);
+              if (!isNaN(n)) amounts.push(n);
+            }
+          }
+        }
+        const label = tokens[i].toLowerCase().replace(/ /g, '_');
+        if (label === 'revenue') {
+          if (amounts.length >= 1 && !financial.revenue_actual) financial.revenue_actual = amounts[0];
+          if (amounts.length >= 2 && !financial.revenue_estimate) financial.revenue_estimate = amounts[1];
+        } else if (label === 'cost') {
+          if (amounts.length >= 1 && !financial.cost_actual) financial.cost_actual = amounts[0];
+          if (amounts.length >= 2 && !financial.cost_estimate) financial.cost_estimate = amounts[1];
+        } else if (label === 'invoiced' && amounts.length >= 1) {
+          financial.invoiced = amounts[0];
+        } else if (label === 'paid' && amounts.length >= 1) {
+          financial.paid = amounts[0];
+        } else if (label === 'outstanding' && amounts.length >= 1) {
+          financial.outstanding = amounts[0];
         }
       }
-    } catch {
-      // 302 redirect is expected and OK
     }
+
+    const revenueTokenIdx = tokens.findIndex(t => t === 'Revenue');
+    const revenueContext = revenueTokenIdx >= 0 ? tokens.slice(revenueTokenIdx, revenueTokenIdx + 8).join(' | ') : 'Revenue token not found';
+    console.log(`[PSA:${this.config.id}] Financial: rev_est=${financial.revenue_estimate}, rev_act=${financial.revenue_actual} | html=${html.length}chars | tokens=${tokens.length} | revCtx=[${revenueContext}]`);
+    return financial;
   }
 
-  sessionExpires = Date.now() + SESSION_TTL;
-  console.log(`[PSA] Login successful. Cookies: ${sessionCookies.length}: ${sessionCookies.map(c => c.split('=')[0]).join(', ')}`);
-}
+  async fetchJobNotes(jobId: number, limit = 20): Promise<PSANote[]> {
+    const formData: Record<string, string | number> = {
+      iDisplayStart: 0,
+      iDisplayLength: limit,
+      sEcho: 1,
+      iColumns: 11,
+      iSortCol_0: 1,
+      sSortDir_0: 'desc',
+      iSortingCols: 1,
+      linkID: jobId,
+      linkSource: 'Job',
+      displayOption: 'false',
+      mustSeeNotes: 'false',
+      mDataProp_10: 'id',
+    };
+    for (let i = 0; i < 10; i++) {
+      formData[`mDataProp_${i}`] = `col${i}`;
+    }
 
-// ─── HTTP Helpers ────────────────────────────────────────────────────────────
+    const body = await this.psaPost(
+      `/Relationship/Log/ListFilter?linkID=${jobId}&linkSource=Job&isCustomer=False`,
+      formData
+    );
+    const data = JSON.parse(body);
 
-async function psaGet(url: string): Promise<string> {
-  await login();
-  const fullUrl = url.startsWith('http') ? url : `${PSA_BASE}${url}`;
-  const res = await fetch(fullUrl, {
-    headers: {
-      'User-Agent': UA,
-      'Cookie': getCookieHeader(),
-      'Accept': 'text/html,application/json',
-    },
-  });
-  extractSetCookies(res.headers);
-  if (!res.ok) {
-    throw new Error(`PSA GET ${res.status}: ${res.statusText} for ${fullUrl}`);
+    const notes: PSANote[] = [];
+    for (const row of (data.aaData || [])) {
+      const noteText = (String(row[8] || '')).replace(/<[^>]+>/g, '').trim();
+      notes.push({
+        id: String(row[0]),
+        created: String(row[1] || ''),
+        employee: String(row[4] || ''),
+        topic: String(row[5] || ''),
+        subject: String(row[7] || ''),
+        note: noteText,
+      });
+    }
+
+    return notes;
   }
-  // Check if we got redirected to login page (not just a page that contains login elements in its layout)
-  const text = await res.text();
-  const isActualLoginPage = text.includes('id="Password"') && text.includes('/Account/Login') && !text.includes('Entity_AlternativeStatusID') && text.length < 50000;
-  if (isActualLoginPage) {
-    console.warn(`[PSA] Got login page for GET ${url} — session may have expired`);
-    // Reset session and retry once
-    sessionCookies = [];
-    sessionExpires = 0;
-    await login();
-    const retry = await fetch(fullUrl, {
-      headers: { 'User-Agent': UA, 'Cookie': getCookieHeader(), 'Accept': 'text/html,application/json' },
+
+  async enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> {
+    let detail: PSAJobDetail | null = null;
+    let financial: PSAFinancial | null = null;
+    let psaNotes: PSANote[] = [];
+
+    try {
+      detail = await this.fetchJobDetail(raw.job_id);
+    } catch (e) {
+      console.error(`[PSA:${this.config.id}] Detail error for ${raw.job_number}:`, e);
+    }
+
+    try {
+      financial = await this.fetchJobFinancial(raw.job_id);
+    } catch (e) {
+      console.error(`[PSA:${this.config.id}] Financial error for ${raw.job_number}:`, e);
+    }
+
+    try {
+      psaNotes = await this.fetchJobNotes(raw.job_id);
+    } catch (e) {
+      console.error(`[PSA:${this.config.id}] Notes error for ${raw.job_number}:`, e);
+    }
+
+    // Map notes
+    const notes: JobNote[] = psaNotes.map(n => ({
+      date: parseDateStr(n.created) || new Date().toISOString().split('T')[0],
+      author: n.employee || 'System',
+      text: n.note || n.subject || '',
+    }));
+
+    // Revenue
+    const estimateAmount = financial?.revenue_estimate || financial?.revenue_actual || 0;
+    const supplementAmount = 0;
+
+    // Type
+    const type = mapJobTypeCode(raw.job_type_code || detail?.job_type || '');
+
+    // Dates from detail
+    const dates = detail?.dates || {};
+    let openedDate = parseDateStr(raw.date);
+    let receivedDate: string | null = null;
+    let inspectedDate: string | null = null;
+    let estimateSentDate: string | null = null;
+    let approvedDate: string | null = null;
+    let productionStartDate: string | null = null;
+    let completedDate: string | null = null;
+    let invoicedDate: string | null = null;
+
+    let estimateCompletedDate: string | null = null;
+    let estimateSubmittedDate: string | null = null;
+
+    for (const [desc, val] of Object.entries(dates)) {
+      const d = desc.toLowerCase();
+      if (d.includes('received') || d.includes('created') || d.includes('reported') || d.includes('open')) {
+        receivedDate = receivedDate || parseDateStr(val);
+        if (!openedDate) openedDate = parseDateStr(val);
+      }
+      if (d.includes('inspect') || d.includes('assess') || d.includes('scope')) {
+        inspectedDate = inspectedDate || parseDateStr(val);
+      }
+      if (d.includes('complet') && d.includes('estimate')) {
+        estimateCompletedDate = estimateCompletedDate || parseDateStr(val);
+      }
+      if ((d.includes('estimate') && d.includes('sent')) || d.includes('submitted') || d === 'esn submitted') {
+        estimateSubmittedDate = estimateSubmittedDate || parseDateStr(val);
+      }
+      if (d.includes('approv')) {
+        approvedDate = approvedDate || parseDateStr(val);
+      }
+      if (d.includes('production') || d.includes('work start') || d === 'start date' ||
+          d.includes('mitigation start') || (d.includes('start') && !d.includes('restart') && !d.includes('estimate'))) {
+        productionStartDate = productionStartDate || parseDateStr(val);
+      }
+      const isFullJobComplete = (
+        (d.includes('complet') || d.includes('finish')) &&
+        !d.includes('mitig') && !d.includes('phase') && !d.includes('clear') &&
+        !d.includes('demo') && !d.includes('drying') && !d.includes('pack') &&
+        !d.includes('estimate')
+      ) || d.includes('close out') || d.includes('job close') || d.includes('final close');
+      if (isFullJobComplete) {
+        completedDate = completedDate || parseDateStr(val);
+      }
+      if (d.includes('invoic')) {
+        invoicedDate = invoicedDate || parseDateStr(val);
+      }
+    }
+
+    estimateSentDate = estimateSubmittedDate || estimateCompletedDate;
+
+    if (!openedDate) openedDate = new Date().toISOString().split('T')[0];
+
+    // Status derivation
+    let status: WorkflowStatus;
+    const altStatus = (detail?.alt_status || '').toLowerCase();
+    const altStatusIndicatesCompleted = altStatus.includes('paid') || altStatus.includes('collections') ||
+      altStatus.includes('closed') || altStatus.includes('write off') || altStatus.includes('invoiced');
+    const altStatusIndicatesSales = altStatus.includes('submitted') || altStatus.includes('review') ||
+      altStatus.includes('negotiat') || altStatus.includes('in process');
+    const altStatusIndicatesWIP = altStatus.includes('appointment') || altStatus.includes('hold');
+
+    if (completedDate) {
+      status = 'Completed';
+    } else if (productionStartDate) {
+      status = 'WIP';
+    } else if (approvedDate || estimateSubmittedDate || altStatusIndicatesSales) {
+      status = 'Sales';
+    } else if (inspectedDate || estimateCompletedDate) {
+      status = 'Scoped';
+    } else if (receivedDate || openedDate) {
+      if (altStatusIndicatesWIP) {
+        status = 'WIP';
+      } else if (altStatusIndicatesCompleted) {
+        status = 'Completed';
+      } else {
+        status = 'Received';
+      }
+    } else {
+      status = 'Received';
+    }
+
+    console.log(`[PSA:${this.config.id}] Job ${raw.job_number}: dates=[${Object.keys(dates).join(',')}] alt="${detail?.alt_status || ''}" → status="${status}" tech="${raw.assigned_to}" pm="${detail?.projectManager}" est="${detail?.estimator}" team="${detail?.team}" ref="${detail?.referrer}"`);
+
+    // Last activity from notes
+    let lastActivityDate = openedDate;
+    if (notes.length > 0) {
+      const sorted = [...notes].sort((a, b) => b.date.localeCompare(a.date));
+      lastActivityDate = sorted[0].date;
+    }
+
+    // Insurance and Contacts
+    const insuranceCarrier = raw.insurance_info || '';
+    const contacts: JobContact[] = [];
+    if (raw.contact_name) {
+      contacts.push({
+        role: 'Insurance Adjuster',
+        name: raw.contact_name,
+        phone: detail?.phones?.[0] || undefined,
+      });
+    }
+    if (raw.client_name) {
+      contacts.push({
+        role: 'Property Owner',
+        name: raw.client_name,
+        phone: detail?.phones?.[1] || detail?.phones?.[0] || undefined,
+      });
+    }
+
+    // Address
+    const address = detail?.site_address1 || raw.address || '';
+    const city = detail?.site_city || raw.city || '';
+
+    // IICRC compliance
+    const hasMoistureReadings = notesContain(notes, ['moisture', 'reading', 'gpp', 'rh', 'humidity']);
+    const hasDryingLogs = notesContain(notes, ['drying log', 'daily monitor', 'day 1', 'day 2', 'drying progress']);
+    const hasEquipmentPlacement = notesContain(notes, ['equipment', 'dehumidifier', 'air mover', 'placed', 'dehu']);
+    const hasDailyMonitoring = notesContain(notes, ['daily monitor', 'daily check', 'monitoring log']);
+    const hasDryStandard = notesContain(notes, ['dry standard', 'clearance', 'final read', 'dry goal', 'reached standard']);
+    const hasSourceDocumented = notesContain(notes, ['source', 'cause', 'loss origin', 'pipe', 'ac ', 'roof', 'toilet']);
+
+    // Ticket completeness
+    const hasInsuranceInfo = !!insuranceCarrier.trim();
+    const hasAdjusterContact = notesContain(notes, ['adjuster', 'adj.', 'adj ']);
+    const hasClaimNumber = notesContain(notes, ['claim', 'claim #', 'claim number']);
+    const hasEstimate = estimateAmount > 0;
+    const hasPhotos = notesContain(notes, ['photo', 'picture', 'image']);
+    const hasWorkAuth = notesContain(notes, ['work auth', 'authorization', 'signed']);
+    const hasPhoneNumber = (detail?.phones?.length || 0) > 0;
+    const hasScopeOfWork = notesContain(notes, ['scope']);
+
+    // Upsell tracking
+    const base = raw.job_number.split('-').slice(0, 3).join('-');
+    const hasContentsJob = allJobNumbers.some(n => n.startsWith(base) && (n.endsWith('-CON') || n.includes('-CON;')));
+    const hasReconEstimate = allJobNumbers.some(n => n.startsWith(base) && (n.endsWith('-STR') || n.endsWith('-RCN') || n.includes('-STR;') || n.includes('-RCN;')));
+    const hasDuctCleaning = notesContain(notes, ['duct clean']);
+    const hasSourceSolution = notesContain(notes, ['source solution', 'source repair']);
+
+    return {
+      id: String(raw.job_id),
+      jobNumber: raw.job_number,
+      customerName: raw.client_name,
+      territory: `T-${raw.territory}`,
+      type,
+      status,
+      address,
+      city,
+      openedDate,
+      receivedDate,
+      inspectedDate,
+      estimateSentDate,
+      approvedDate,
+      productionStartDate,
+      completedDate,
+      invoicedDate,
+      lastActivityDate,
+      estimateAmount,
+      supplementAmount,
+      contacts,
+      insuranceCarrier,
+      claimNumber: '',
+      adjusterName: raw.contact_name || '',
+      adjusterPhone: detail?.phones?.[0] || '',
+      notes,
+      hasMoistureReadings,
+      hasDryingLogs,
+      hasEquipmentPlacement,
+      hasDailyMonitoring,
+      hasDryStandard,
+      hasSourceDocumented,
+      hasInsuranceInfo,
+      hasAdjusterContact,
+      hasClaimNumber,
+      hasEstimate,
+      hasPhotos,
+      hasWorkAuth,
+      hasPhoneNumber,
+      hasScopeOfWork,
+      hasContentsJob,
+      hasReconEstimate,
+      hasDuctCleaning,
+      hasSourceSolution,
+      photoCount: 0,
+      priorityOverride: 0,
+      assignedTech: raw.assigned_to || '',
+      projectManager: detail?.projectManager || '',
+      estimator: detail?.estimator || detail?.team || '',
+      businessDev: detail?.referrer || '',
+    };
+  }
+
+  async fetchJobs(): Promise<Job[]> {
+    console.log(`[PSA:${this.config.id}] Fetching all open jobs...`);
+    const allJobs = await this.fetchAllOpenJobs(100);
+    console.log(`[PSA:${this.config.id}] Total open jobs: ${allJobs.length}`);
+
+    // Filter by territory (if configured) and year, excluding STR/PLM sub-jobs
+    let filtered = allJobs;
+    if (this.config.territoryFilter) {
+      filtered = filtered.filter(j => j.territory === this.config.territoryFilter);
+    }
+    filtered = filtered.filter(j => {
+      if (j.year !== this.config.yearFilter) return false;
+      if (EXCLUDED_PSA_TYPES.has(j.job_type_code.toUpperCase())) return false;
+      return true;
     });
-    extractSetCookies(retry.headers);
-    if (!retry.ok) throw new Error(`PSA GET retry ${retry.status}: ${retry.statusText}`);
-    return retry.text();
+
+    console.log(`[PSA:${this.config.id}] Filtered jobs: ${filtered.length}`);
+
+    const allJobNumbers = allJobs.map(j => j.job_number);
+
+    // Enrich jobs in parallel batches
+    const enriched: Job[] = [];
+    const batchSize = 10;
+
+    for (let i = 0; i < filtered.length; i += batchSize) {
+      const batch = filtered.slice(i, i + batchSize);
+      const results = await Promise.allSettled(
+        batch.map(j => this.enrichJob(j, allJobNumbers))
+      );
+
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          enriched.push(result.value);
+        }
+      }
+
+      console.log(`[PSA:${this.config.id}] Enriched ${Math.min(i + batchSize, filtered.length)}/${filtered.length}`);
+    }
+
+    // Post-enrich filter: exclude completed+invoiced jobs
+    const active = enriched.filter(j => {
+      if (j.completedDate && j.invoicedDate) {
+        console.log(`[PSA:${this.config.id}] Excluding completed+invoiced: ${j.jobNumber} (${j.customerName})`);
+        return false;
+      }
+      return true;
+    });
+
+    console.log(`[PSA:${this.config.id}] After filter: ${active.length} active jobs (excluded ${enriched.length - active.length} completed+invoiced)`);
+    return active;
   }
-  return text;
 }
 
-async function psaPost(url: string, data: Record<string, string | number>): Promise<string> {
-  await login();
-  const fullUrl = url.startsWith('http') ? url : `${PSA_BASE}${url}`;
-  const body = new URLSearchParams();
-  for (const [k, v] of Object.entries(data)) {
-    body.append(k, String(v));
-  }
-  const res = await fetch(fullUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'User-Agent': UA,
-      'Cookie': getCookieHeader(),
-      'Accept': 'application/json',
-    },
-    body: body.toString(),
-  });
-  extractSetCookies(res.headers);
-  if (!res.ok) {
-    throw new Error(`PSA POST ${res.status}: ${res.statusText} for ${fullUrl}`);
-  }
-  return res.text();
-}
+// ─── Data Mapping Functions (static, used by all sessions) ───────────────────
 
-// ─── Data Mapping ────────────────────────────────────────────────────────────
-
-// PSA type codes that appear on the WIP report: WTR, MLD, CON, STC, CPT, FRM
-// STR (structural/reconstruction) and PLM (plumbing) are sub-jobs NOT tracked on WIP
 const EXCLUDED_PSA_TYPES = new Set(['STR', 'PLM']);
 
 function mapJobTypeCode(code: string): JobType {
@@ -221,7 +781,7 @@ function mapJobTypeCode(code: string): JobType {
   if (c === 'CON' || c === 'CNTNT' || c.includes('CONTENT')) return 'CNTNT';
   if (c === 'DUCT' || c.includes('HVAC')) return 'DUCT';
   if (c === 'RCN' || c === 'RECON' || c.includes('REBUILD') || c === 'STR' || c.includes('STORM')) return 'RECON';
-  if (c === 'FRM' || c === 'CPT' || c === 'STC') return 'WTR'; // Framing/Carpet/STC map to WTR on WIP
+  if (c === 'FRM' || c === 'CPT' || c === 'STC') return 'WTR';
   return 'WTR';
 }
 
@@ -240,19 +800,17 @@ function parseDateStr(s: string | null | undefined): string | null {
   const str = s.trim();
   if (!str) return null;
 
-  // Try various date formats PSA returns
-  // MM/DD/YYYY HH:MM AM/PM
   let match = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
   if (match) {
     const [, m, d, y] = match;
     return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
   }
-  // ISO format
+
   match = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (match) {
     return match[0];
   }
-  // Try native Date parsing
+
   const d = new Date(str);
   if (!isNaN(d.getTime())) {
     return d.toISOString().split('T')[0];
@@ -260,10 +818,7 @@ function parseDateStr(s: string | null | undefined): string | null {
   return null;
 }
 
-// ─── HTML Scraping Helpers (matching MyClaw's approach) ──────────────────────
-
 function findSelectedOption(optionsHtml: string): { value: string; text: string } | null {
-  // Match all <option> tags and find the one with "selected"
   const optionRegex = /<option\s([^>]*)>([^<]*)<\/option>/gi;
   let m;
   while ((m = optionRegex.exec(optionsHtml)) !== null) {
@@ -310,7 +865,7 @@ function notesContain(notes: JobNote[], keywords: string[]): boolean {
   return keywords.some(k => allText.includes(k.toLowerCase()));
 }
 
-// ─── PSA API Methods ─────────────────────────────────────────────────────────
+// ─── Type Definitions ─────────────────────────────────────────────────────────
 
 interface PSARawJob {
   job_number: string;
@@ -330,70 +885,6 @@ interface PSARawJob {
   job_type_code: string;
 }
 
-async function fetchAllOpenJobs(pageSize = 100): Promise<PSARawJob[]> {
-  const allJobs: PSARawJob[] = [];
-  let offset = 0;
-  let total: number | null = null;
-
-  while (total === null || offset < total) {
-    const formData: Record<string, string | number> = {
-      option: 'Open',
-      iDisplayStart: offset,
-      iDisplayLength: pageSize,
-      sEcho: 1,
-      iColumns: 11,
-      iSortCol_0: 8,
-      sSortDir_0: 'desc',
-      iSortingCols: 1,
-      mDataProp_10: 'id',
-    };
-    // Add column data props
-    for (let i = 0; i < 10; i++) {
-      formData[`mDataProp_${i}`] = `col${i}`;
-    }
-
-    const body = await psaPost('/Job/Job/ListFilter', formData);
-    const data = JSON.parse(body);
-    total = data.iTotalDisplayRecords;
-
-    for (const row of data.aaData) {
-      const job: PSARawJob = {
-        job_number: row[0],
-        client_name: row[1],
-        contact_name: row[2],
-        insurance_info: (row[3] || '').replace(/&nbsp;/g, '').trim(),
-        address: row[4],
-        state: row[5],
-        city: row[6],
-        assigned_to: row[7],
-        date: row[8],
-        status: row[9],
-        job_id: row[10],
-        territory: '',
-        year: '',
-        seq: '',
-        job_type_code: '',
-      };
-
-      // Parse job number: territory-year-seq-type
-      const parts = job.job_number.split('-');
-      if (parts.length >= 4) {
-        job.territory = parts[0];
-        job.year = parts[1];
-        job.seq = parts[2];
-        job.job_type_code = parts[3].split(';')[0];
-      }
-
-      allJobs.push(job);
-    }
-
-    offset += pageSize;
-    console.log(`[PSA] Fetched ${allJobs.length}/${total} jobs...`);
-  }
-
-  return allJobs;
-}
-
 interface PSAJobDetail {
   completeddisplay: number;
   revenuedisplay: number;
@@ -404,6 +895,8 @@ interface PSAJobDetail {
   location: string;
   team: string;
   referrer: string;
+  projectManager: string;
+  estimator: string;
   dates: Record<string, string>;
   phones: string[];
   emails: string[];
@@ -411,97 +904,6 @@ interface PSAJobDetail {
   site_city: string;
   site_region: string;
   site_postalcode: string;
-}
-
-async function fetchJobDetail(jobId: number): Promise<PSAJobDetail> {
-  const html = await psaGet(`/Job/Job/Edit/${jobId}`);
-
-  const detail: PSAJobDetail = {
-    completeddisplay: 0,
-    revenuedisplay: 0,
-    deductible: 0,
-    job_type: '',
-    alt_status: '',
-    alt_status_id: '',
-    location: '',
-    team: '',
-    referrer: '',
-    dates: {},
-    phones: [],
-    emails: [],
-    site_address1: '',
-    site_city: '',
-    site_region: '',
-    site_postalcode: '',
-  };
-
-  // Financial fields
-  const completedVal = extractInputValue(html, 'Entity_CompletedDisplay');
-  if (completedVal) detail.completeddisplay = parseFloat(completedVal) || 0;
-  const revenueVal = extractInputValue(html, 'Entity_RevenueDisplay');
-  if (revenueVal) detail.revenuedisplay = parseFloat(revenueVal) || 0;
-  const deductibleVal = extractInputValue(html, 'Entity_Deductible');
-  if (deductibleVal) detail.deductible = parseFloat(deductibleVal) || 0;
-
-  // Job type
-  detail.job_type = extractSelectValue(html, 'Entity_JobTypeID');
-
-  // Alt status — use robust option finder that handles any attribute order
-  const altSection = html.match(/id="Entity_AlternativeStatusID"[^>]*>([\s\S]*?)<\/select>/);
-  if (altSection) {
-    const sel = findSelectedOption(altSection[1]);
-    if (sel) {
-      detail.alt_status_id = sel.value;
-      detail.alt_status = sel.text;
-    }
-  }
-
-  // Location, team, referrer
-  detail.location = extractSelectValue(html, 'Entity_LocationID');
-  // Team uses name= instead of id=
-  const teamSection = html.match(/name="Entity\.TeamID"[^>]*>(.*?)<\/select>/s);
-  if (teamSection) {
-    const selected = teamSection[1].match(/selected[^>]*>([^<]*)/);
-    if (selected) detail.team = selected[1].trim();
-  }
-  detail.referrer = extractSelectValue(html, 'Entity_ReferrerID');
-
-  // Lifecycle dates
-  const dateDescs = html.matchAll(/JobDates\[(\d+)\]\.DateTypeDescription"[^>]*value="([^"]*)"/g);
-  const dateVals = html.matchAll(/(?:name="JobDates\[(\d+)\]\.DateTime"|id="JobDates_(\d+)__DateTime")[^>]*value="([^"]*)"/g);
-
-  const descMap: Record<string, string> = {};
-  for (const m of dateDescs) {
-    descMap[m[1]] = m[2];
-  }
-  const valMap: Record<string, string> = {};
-  for (const m of dateVals) {
-    const idx = m[1] || m[2];
-    valMap[idx] = m[3];
-  }
-  for (const [idx, desc] of Object.entries(descMap)) {
-    const val = valMap[idx];
-    if (val) {
-      detail.dates[desc] = val;
-    }
-  }
-
-  // Phones and emails
-  detail.phones = extractPhones(html);
-  detail.emails = extractEmails(html);
-
-  // Address
-  const addr1 = extractInputValue(html, 'Entity_rm_site_Address1');
-  if (addr1) detail.site_address1 = addr1;
-  const cityVal = extractInputValue(html, 'Entity_rm_site_City');
-  if (cityVal) detail.site_city = cityVal;
-  const regionVal = extractInputValue(html, 'Entity_rm_site_Region');
-  if (regionVal) detail.site_region = regionVal;
-  const postalVal = extractInputValue(html, 'Entity_rm_site_PostalCode');
-  if (postalVal) detail.site_postalcode = postalVal;
-
-  console.log(`[PSA] Detail for ${jobId}: alt_status="${detail.alt_status}", revenue=${detail.revenuedisplay}, dates=${Object.keys(detail.dates).length}, phones=${detail.phones.length}`);
-  return detail;
 }
 
 interface PSAFinancial {
@@ -514,88 +916,6 @@ interface PSAFinancial {
   outstanding: number;
 }
 
-async function fetchJobFinancial(jobId: number): Promise<PSAFinancial> {
-  const html = await psaGet(`/Job/Financial/List?linkID=${jobId}&UpdateTargetId=FinancialTab&Source=Job`);
-
-  const financial: PSAFinancial = {
-    revenue_estimate: 0,
-    revenue_actual: 0,
-    cost_estimate: 0,
-    cost_actual: 0,
-    invoiced: 0,
-    paid: 0,
-    outstanding: 0,
-  };
-
-  // Parse hidden input totals
-  const fieldMap: Record<string, keyof PSAFinancial> = {
-    'TotalCost.Actual': 'cost_actual',
-    'TotalCost.Estimate': 'cost_estimate',
-    'TotalRevenue.Actual': 'revenue_actual',
-    'TotalRevenue.Estimate': 'revenue_estimate',
-  };
-
-  for (const [name, key] of Object.entries(fieldMap)) {
-    const escapedName = name.replace(/\./g, '\\.');
-    const regex = new RegExp(`name="${escapedName}"[^>]*value="([^"]*)"`, 'i');
-    const match = html.match(regex);
-    if (match && match[1]) {
-      financial[key] = parseFloat(match[1]) || 0;
-    }
-  }
-
-  // Parse financial table — matching MyClaw's Python approach
-  // The table has rows like: Revenue | $12,561.00 | $12,561.00  (actual | estimate)
-  const clean = html.replace(/<script[^>]*>.*?<\/script>/gs, '').replace(/<[^>]+>/g, '\t');
-  const tokens = clean.split('\t').map(t => t.trim()).filter(Boolean);
-
-  const financialLabels = ['Material', 'Labor', 'Subtrade', 'Equipment', 'Expense',
-    'Revenue Overhead', 'Cost', 'Revenue', 'Profit', 'Gross Margin',
-    'Invoiced', 'Paid', 'Outstanding'];
-
-  for (let i = 0; i < tokens.length; i++) {
-    if (financialLabels.includes(tokens[i])) {
-      const amounts: number[] = [];
-      for (let j = 1; j <= 5; j++) {
-        if (i + j >= tokens.length) break;
-        const next = tokens[i + j];
-        // Stop if we hit another label or header
-        if (financialLabels.includes(next) || next === 'Totals' || next === 'Actual' || next === 'Estimate') break;
-        // Extract dollar values (handle negative with parens)
-        const dollarVals = next.match(/\(?\$?[\d,]+\.?\d*\)?%?/g) || [];
-        for (const dv of dollarVals) {
-          const cleaned = dv.replace(/\$/g, '').replace(/,/g, '').replace('(', '-').replace(')', '').replace('%', '').trim();
-          if (cleaned) {
-            const n = parseFloat(cleaned);
-            if (!isNaN(n)) amounts.push(n);
-          }
-        }
-      }
-      const label = tokens[i].toLowerCase().replace(/ /g, '_');
-      // First amount = actual, second = estimate (matching Python's MyClaw)
-      if (label === 'revenue') {
-        if (amounts.length >= 1 && !financial.revenue_actual) financial.revenue_actual = amounts[0];
-        if (amounts.length >= 2 && !financial.revenue_estimate) financial.revenue_estimate = amounts[1];
-      } else if (label === 'cost') {
-        if (amounts.length >= 1 && !financial.cost_actual) financial.cost_actual = amounts[0];
-        if (amounts.length >= 2 && !financial.cost_estimate) financial.cost_estimate = amounts[1];
-      } else if (label === 'invoiced' && amounts.length >= 1) {
-        financial.invoiced = amounts[0];
-      } else if (label === 'paid' && amounts.length >= 1) {
-        financial.paid = amounts[0];
-      } else if (label === 'outstanding' && amounts.length >= 1) {
-        financial.outstanding = amounts[0];
-      }
-    }
-  }
-
-  // Debug: log financial parsing details
-  const revenueTokenIdx = tokens.findIndex(t => t === 'Revenue');
-  const revenueContext = revenueTokenIdx >= 0 ? tokens.slice(revenueTokenIdx, revenueTokenIdx + 8).join(' | ') : 'Revenue token not found';
-  console.log(`[PSA] Financial: rev_est=${financial.revenue_estimate}, rev_act=${financial.revenue_actual} | html=${html.length}chars | tokens=${tokens.length} | revCtx=[${revenueContext}]`);
-  return financial;
-}
-
 interface PSANote {
   id: string;
   created: string;
@@ -605,372 +925,26 @@ interface PSANote {
   note: string;
 }
 
-async function fetchJobNotes(jobId: number, limit = 20): Promise<PSANote[]> {
-  const formData: Record<string, string | number> = {
-    iDisplayStart: 0,
-    iDisplayLength: limit,
-    sEcho: 1,
-    iColumns: 11,
-    iSortCol_0: 1,
-    sSortDir_0: 'desc',
-    iSortingCols: 1,
-    linkID: jobId,
-    linkSource: 'Job',
-    displayOption: 'false',
-    mustSeeNotes: 'false',
-    mDataProp_10: 'id',
-  };
-  for (let i = 0; i < 10; i++) {
-    formData[`mDataProp_${i}`] = `col${i}`;
-  }
-
-  const body = await psaPost(
-    `/Relationship/Log/ListFilter?linkID=${jobId}&linkSource=Job&isCustomer=False`,
-    formData
-  );
-  const data = JSON.parse(body);
-
-  const notes: PSANote[] = [];
-  for (const row of (data.aaData || [])) {
-    const noteText = (String(row[8] || '')).replace(/<[^>]+>/g, '').trim();
-    notes.push({
-      id: String(row[0]),
-      created: String(row[1] || ''),
-      employee: String(row[4] || ''),
-      topic: String(row[5] || ''),
-      subject: String(row[7] || ''),
-      note: noteText,
-    });
-  }
-
-  return notes;
-}
-
-// ─── Enrichment: PSARawJob → Job ─────────────────────────────────────────────
-
-async function enrichJob(raw: PSARawJob, allJobNumbers: string[]): Promise<Job> {
-  let detail: PSAJobDetail | null = null;
-  let financial: PSAFinancial | null = null;
-  let psaNotes: PSANote[] = [];
-
-  try {
-    detail = await fetchJobDetail(raw.job_id);
-  } catch (e) {
-    console.error(`[PSA] Detail error for ${raw.job_number}:`, e);
-  }
-
-  try {
-    financial = await fetchJobFinancial(raw.job_id);
-  } catch (e) {
-    console.error(`[PSA] Financial error for ${raw.job_number}:`, e);
-  }
-
-  try {
-    psaNotes = await fetchJobNotes(raw.job_id);
-  } catch (e) {
-    console.error(`[PSA] Notes error for ${raw.job_number}:`, e);
-  }
-
-  // Map notes
-  const notes: JobNote[] = psaNotes.map(n => ({
-    date: parseDateStr(n.created) || new Date().toISOString().split('T')[0],
-    author: n.employee || 'System',
-    text: n.note || n.subject || '',
-  }));
-
-  // Revenue — use TotalRevenue.Estimate from financial endpoint (matches WIP report's "Sum of Estimated Revenue")
-  // Do NOT use revenuedisplay — that's a per-unit/rate field from the detail page, not the total estimate
-  const estimateAmount = financial?.revenue_estimate || financial?.revenue_actual || 0;
-  const supplementAmount = 0; // PSA doesn't have a clean supplement field
-
-  // Type — from job number code or detail
-  const type = mapJobTypeCode(raw.job_type_code || detail?.job_type || '');
-
-  // Dates from detail
-  const dates = detail?.dates || {};
-  let openedDate = parseDateStr(raw.date);
-  let receivedDate: string | null = null;
-  let inspectedDate: string | null = null;
-  let estimateSentDate: string | null = null;
-  let approvedDate: string | null = null;
-  let productionStartDate: string | null = null;
-  let completedDate: string | null = null;
-  let invoicedDate: string | null = null;
-
-  let estimateCompletedDate: string | null = null; // Estimate document finalized (still Scoped)
-  let estimateSubmittedDate: string | null = null; // Estimate sent to insurance (Sales)
-
-  for (const [desc, val] of Object.entries(dates)) {
-    const d = desc.toLowerCase();
-    if (d.includes('received') || d.includes('created') || d.includes('reported') || d.includes('open')) {
-      receivedDate = receivedDate || parseDateStr(val);
-      if (!openedDate) openedDate = parseDateStr(val);
-    }
-    if (d.includes('inspect') || d.includes('assess') || d.includes('scope')) {
-      inspectedDate = inspectedDate || parseDateStr(val);
-    }
-    // "Completed Estimate" = estimate document finalized (still in Scoped, NOT Sales)
-    if (d.includes('complet') && d.includes('estimate')) {
-      estimateCompletedDate = estimateCompletedDate || parseDateStr(val);
-    }
-    // "ESN Submitted" / "Estimate Sent" = sent to insurance → now in Sales
-    if ((d.includes('estimate') && d.includes('sent')) || d.includes('submitted') || d === 'esn submitted') {
-      estimateSubmittedDate = estimateSubmittedDate || parseDateStr(val);
-    }
-    if (d.includes('approv')) {
-      approvedDate = approvedDate || parseDateStr(val);
-    }
-    // Production start — match "production start", "work start", "start date", "mitigation start"
-    // but NOT "start" in other contexts like "restart"
-    if (d.includes('production') || d.includes('work start') || d === 'start date' ||
-        d.includes('mitigation start') || (d.includes('start') && !d.includes('restart') && !d.includes('estimate'))) {
-      productionStartDate = productionStartDate || parseDateStr(val);
-    }
-    // Job completion — ONLY match "Actual Completion", "Job Completed", "Close Out"
-    // Exclude: "Completed Estimate" (estimate done), "Mitigation Completed", "Phase Complete", etc.
-    const isFullJobComplete = (
-      (d.includes('complet') || d.includes('finish')) &&
-      !d.includes('mitig') && !d.includes('phase') && !d.includes('clear') &&
-      !d.includes('demo') && !d.includes('drying') && !d.includes('pack') &&
-      !d.includes('estimate')
-    ) || d.includes('close out') || d.includes('job close') || d.includes('final close');
-    if (isFullJobComplete) {
-      completedDate = completedDate || parseDateStr(val);
-    }
-    // Track invoice date — jobs with both completion + invoice are fully closed
-    if (d.includes('invoic')) {
-      invoicedDate = invoicedDate || parseDateStr(val);
-    }
-  }
-
-  // Resolve estimateSentDate: prefer actual submission over just "Completed Estimate"
-  // "Completed Estimate" means the doc is finalized (Scoped stage), while "ESN Submitted" means
-  // it was actually sent to insurance (Sales stage).
-  // For status derivation, we use estimateSubmittedDate for Sales trigger, but keep
-  // estimateCompletedDate available for the estimateSentDate output field.
-  estimateSentDate = estimateSubmittedDate || estimateCompletedDate;
-
-  if (!openedDate) openedDate = new Date().toISOString().split('T')[0];
-
-  // ─── Status derivation ───────────────────────────────────────────────
-  // PSA's "Alternative Status" is a billing/payment status, not a workflow status.
-  // Derive workflow status from which lifecycle dates are populated (most advanced wins).
-  // Also check alt_status for billing-related keywords that indicate completion.
-  let status: WorkflowStatus;
-  const altStatus = (detail?.alt_status || '').toLowerCase();
-  const altStatusIndicatesCompleted = altStatus.includes('paid') || altStatus.includes('collections') ||
-    altStatus.includes('closed') || altStatus.includes('write off') || altStatus.includes('invoiced');
-  const altStatusIndicatesSales = altStatus.includes('submitted') || altStatus.includes('review') ||
-    altStatus.includes('negotiat') || altStatus.includes('in process');
-  const altStatusIndicatesWIP = altStatus.includes('appointment') || altStatus.includes('hold');
-
-  if (completedDate) {
-    status = 'Completed';
-  } else if (productionStartDate) {
-    status = 'WIP';
-  } else if (approvedDate || estimateSubmittedDate || altStatusIndicatesSales) {
-    // Sales = estimate was actually submitted/sent to insurance, or approved
-    // "Completed Estimate" alone keeps the job in Scoped (estimate doc finalized but not sent)
-    status = 'Sales';
-  } else if (inspectedDate || estimateCompletedDate) {
-    // Scoped = inspected OR estimate completed (but not yet submitted)
-    status = 'Scoped';
-  } else if (receivedDate || openedDate) {
-    // Check if notes or alt_status suggest work is in progress
-    if (altStatusIndicatesWIP) {
-      status = 'WIP';
-    } else if (altStatusIndicatesCompleted) {
-      status = 'Completed';
-    } else {
-      status = 'Received';
-    }
-  } else {
-    status = 'Received';
-  }
-
-  console.log(`[PSA] Job ${raw.job_number}: dates=[${Object.keys(dates).join(',')}] alt="${detail?.alt_status || ''}" → status="${status}"`);
-
-  // Last activity from notes
-  let lastActivityDate = openedDate;
-  if (notes.length > 0) {
-    const sorted = [...notes].sort((a, b) => b.date.localeCompare(a.date));
-    lastActivityDate = sorted[0].date;
-  }
-
-  // Insurance from the list data
-  const insuranceCarrier = raw.insurance_info || '';
-
-  // Contacts
-  const contacts: JobContact[] = [];
-  if (raw.contact_name) {
-    contacts.push({
-      role: 'Insurance Adjuster',
-      name: raw.contact_name,
-      phone: detail?.phones?.[0] || undefined,
-    });
-  }
-  if (raw.client_name) {
-    contacts.push({
-      role: 'Property Owner',
-      name: raw.client_name,
-      phone: detail?.phones?.[1] || detail?.phones?.[0] || undefined,
-    });
-  }
-
-  // Address
-  const address = detail?.site_address1 || raw.address || '';
-  const city = detail?.site_city || raw.city || '';
-
-  // IICRC compliance — check notes
-  const hasMoistureReadings = notesContain(notes, ['moisture', 'reading', 'gpp', 'rh', 'humidity']);
-  const hasDryingLogs = notesContain(notes, ['drying log', 'daily monitor', 'day 1', 'day 2', 'drying progress']);
-  const hasEquipmentPlacement = notesContain(notes, ['equipment', 'dehumidifier', 'air mover', 'placed', 'dehu']);
-  const hasDailyMonitoring = notesContain(notes, ['daily monitor', 'daily check', 'monitoring log']);
-  const hasDryStandard = notesContain(notes, ['dry standard', 'clearance', 'final read', 'dry goal', 'reached standard']);
-  const hasSourceDocumented = notesContain(notes, ['source', 'cause', 'loss origin', 'pipe', 'ac ', 'roof', 'toilet']);
-
-  // Ticket completeness
-  const hasInsuranceInfo = !!insuranceCarrier.trim();
-  const hasAdjusterContact = notesContain(notes, ['adjuster', 'adj.', 'adj ']);
-  const hasClaimNumber = notesContain(notes, ['claim', 'claim #', 'claim number']);
-  const hasEstimate = estimateAmount > 0;
-  const hasPhotos = notesContain(notes, ['photo', 'picture', 'image']);
-  const hasWorkAuth = notesContain(notes, ['work auth', 'authorization', 'signed']);
-  const hasPhoneNumber = (detail?.phones?.length || 0) > 0;
-  const hasScopeOfWork = notesContain(notes, ['scope']);
-
-  // Upsell tracking — check if companion jobs exist
-  const base = raw.job_number.split('-').slice(0, 3).join('-');
-  const hasContentsJob = allJobNumbers.some(n => n.startsWith(base) && (n.endsWith('-CON') || n.includes('-CON;')));
-  const hasReconEstimate = allJobNumbers.some(n => n.startsWith(base) && (n.endsWith('-STR') || n.endsWith('-RCN') || n.includes('-STR;') || n.includes('-RCN;')));
-  const hasDuctCleaning = notesContain(notes, ['duct clean']);
-  const hasSourceSolution = notesContain(notes, ['source solution', 'source repair']);
-
-  return {
-    id: String(raw.job_id),
-    jobNumber: raw.job_number,
-    customerName: raw.client_name,
-    territory: `T-${raw.territory}`,
-    type,
-    status,
-    address,
-    city,
-    openedDate,
-    receivedDate,
-    inspectedDate,
-    estimateSentDate,
-    approvedDate,
-    productionStartDate,
-    completedDate,
-    invoicedDate,
-    lastActivityDate,
-    estimateAmount,
-    supplementAmount,
-    contacts,
-    insuranceCarrier,
-    claimNumber: '',
-    adjusterName: raw.contact_name || '',
-    adjusterPhone: detail?.phones?.[0] || '',
-    notes,
-    hasMoistureReadings,
-    hasDryingLogs,
-    hasEquipmentPlacement,
-    hasDailyMonitoring,
-    hasDryStandard,
-    hasSourceDocumented,
-    hasInsuranceInfo,
-    hasAdjusterContact,
-    hasClaimNumber,
-    hasEstimate,
-    hasPhotos,
-    hasWorkAuth,
-    hasPhoneNumber,
-    hasScopeOfWork,
-    hasContentsJob,
-    hasReconEstimate,
-    hasDuctCleaning,
-    hasSourceSolution,
-    photoCount: 0,
-    priorityOverride: 0,
-    assignedTech: raw.assigned_to || '',
-    businessDev: detail?.referrer || '',
-  };
-}
-
-// ─── Main Fetch Logic ────────────────────────────────────────────────────────
-
-// Year filter replaces the old status-based exclude filter
-// (PSA list status is always "Open", so status-based filtering was ineffective)
-
-async function fetchT19Jobs(): Promise<Job[]> {
-  console.log('[PSA] Fetching all open jobs...');
-  const allJobs = await fetchAllOpenJobs(100);
-  console.log(`[PSA] Total open jobs: ${allJobs.length}`);
-
-  // Filter to T-19, current year only, excluding STR/PLM sub-job types
-  // The WIP report only has year-26 jobs and excludes structural (STR) and plumbing (PLM) sub-jobs
-  const t19 = allJobs.filter(j => {
-    if (j.territory !== '19') return false;
-    if (j.year !== '26') return false;
-    // STR (structural/reconstruction) and PLM (plumbing) are sub-jobs not tracked on WIP
-    if (EXCLUDED_PSA_TYPES.has(j.job_type_code.toUpperCase())) return false;
-    return true;
-  });
-
-  console.log(`[PSA] T-19 year-26 jobs (excl STR/PLM): ${t19.length}`);
-
-  const allJobNumbers = allJobs.map(j => j.job_number);
-
-  // Enrich jobs in parallel batches — 10 concurrent for speed
-  const enriched: Job[] = [];
-  const batchSize = 10;
-
-  for (let i = 0; i < t19.length; i += batchSize) {
-    const batch = t19.slice(i, i + batchSize);
-    const results = await Promise.allSettled(
-      batch.map(j => enrichJob(j, allJobNumbers))
-    );
-
-    for (const result of results) {
-      if (result.status === 'fulfilled') {
-        enriched.push(result.value);
-      }
-    }
-
-    console.log(`[PSA] Enriched ${Math.min(i + batchSize, t19.length)}/${t19.length}`);
-  }
-
-  // Post-enrich filter: exclude jobs that are fully completed AND invoiced
-  // The WIP report only shows active jobs — once a job has both an "Actual Completion" date
-  // and an "Invoiced" date, it's fully closed and should not appear on the WIP board.
-  // Jobs that are completed but NOT yet invoiced are kept (they're in the "Completed" stage of WIP).
-  const active = enriched.filter(j => {
-    if (j.completedDate && j.invoicedDate) {
-      console.log(`[PSA] Excluding completed+invoiced: ${j.jobNumber} (${j.customerName})`);
-      return false;
-    }
-    return true;
-  });
-
-  console.log(`[PSA] After filter: ${active.length} active jobs (excluded ${enriched.length - active.length} completed+invoiced)`);
-  return active;
-}
-
-// ─── Adapter Class ───────────────────────────────────────────────────────────
-
-let cachedJobs: Job[] | null = null;
-let cacheTime = 0;
-const CACHE_TTL = 15 * 60 * 1000; // 15 minute cache
+// ─── Adapter Implementation ──────────────────────────────────────────────────
 
 class PSAAdapter implements DataAdapter {
+  private session: PSASession;
+  private cachedJobs: Job[] | null = null;
+  private cacheTime = 0;
+  private readonly CACHE_TTL = 15 * 60 * 1000; // 15 minutes
+
+  constructor(config: PSALocationConfig) {
+    this.session = new PSASession(config);
+  }
+
   async getJobs(): Promise<Job[]> {
-    if (cachedJobs && Date.now() - cacheTime < CACHE_TTL) {
-      return cachedJobs;
+    if (this.cachedJobs && Date.now() - this.cacheTime < this.CACHE_TTL) {
+      return this.cachedJobs;
     }
 
-    cachedJobs = await fetchT19Jobs();
-    cacheTime = Date.now();
-    return cachedJobs;
+    this.cachedJobs = await this.session.fetchJobs();
+    this.cacheTime = Date.now();
+    return this.cachedJobs;
   }
 
   async getJob(id: string): Promise<Job | null> {
@@ -979,19 +953,96 @@ class PSAAdapter implements DataAdapter {
   }
 }
 
+// ─── Factory Functions ───────────────────────────────────────────────────────
+
 export function createPSAAdapter(): DataAdapter {
-  return new PSAAdapter();
+  // Default: uses T-19 config from env vars
+  return createPSAAdapterForConfig({
+    id: 't19',
+    name: 'T-19 Miami',
+    username: process.env.PSA_USERNAME || '',
+    password: process.env.PSA_PASSWORD || '',
+    baseUrl: process.env.PSA_BASE_URL || 'https://uwrg.psarcweb.com/PSAWeb',
+    schema: process.env.PSA_SCHEMA || '1022',
+    territoryFilter: '19',
+    yearFilter: '26',
+  });
 }
 
-// ─── Debug: fetch detail for a single job and return raw extraction ──────────
+export function createPSAAdapterForConfig(config: PSALocationConfig): DataAdapter {
+  return new PSAAdapter(config);
+}
+
+// ─── Debug Functions ─────────────────────────────────────────────────────────
+
+export async function testPSAConnection(): Promise<{
+  authenticated: boolean;
+  jobCount?: number;
+  sampleJobs?: string[];
+  authError?: string;
+}> {
+  try {
+    const config: PSALocationConfig = {
+      id: 't19',
+      name: 'T-19 Miami',
+      username: process.env.PSA_USERNAME || '',
+      password: process.env.PSA_PASSWORD || '',
+      baseUrl: process.env.PSA_BASE_URL || 'https://uwrg.psarcweb.com/PSAWeb',
+      schema: process.env.PSA_SCHEMA || '1022',
+      territoryFilter: '19',
+      yearFilter: '26',
+    };
+
+    const session = new PSASession(config);
+    await session.login();
+
+    const formData: Record<string, string | number> = {
+      option: 'Open',
+      iDisplayStart: 0,
+      iDisplayLength: 5,
+      sEcho: 1,
+      iColumns: 11,
+      iSortCol_0: 8,
+      sSortDir_0: 'desc',
+      iSortingCols: 1,
+      mDataProp_10: 'id',
+    };
+    for (let i = 0; i < 10; i++) {
+      formData[`mDataProp_${i}`] = `col${i}`;
+    }
+
+    const body = await session.psaPost('/Job/Job/ListFilter', formData);
+    const data = JSON.parse(body);
+
+    return {
+      authenticated: true,
+      jobCount: data.iTotalRecords || 0,
+      sampleJobs: (data.aaData || []).slice(0, 5).map((r: string[]) => `${r[0]} | ${r[1]} | ${r[9]}`),
+    };
+  } catch (e) {
+    return {
+      authenticated: false,
+      authError: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
 
 export async function debugJobDetail(jobId: number): Promise<Record<string, unknown>> {
   try {
-    await login();
+    const config: PSALocationConfig = {
+      id: 't19',
+      name: 'T-19 Miami',
+      username: process.env.PSA_USERNAME || '',
+      password: process.env.PSA_PASSWORD || '',
+      baseUrl: process.env.PSA_BASE_URL || 'https://uwrg.psarcweb.com/PSAWeb',
+      schema: process.env.PSA_SCHEMA || '1022',
+      territoryFilter: '19',
+      yearFilter: '26',
+    };
 
-    const html = await psaGet(`/Job/Job/Edit/${jobId}`);
+    const session = new PSASession(config);
+    const html = await session.psaGet(`/Job/Job/Edit/${jobId}`);
 
-    // Dump ALL <select> elements with their id/name and selected value
     const selectRegex = /<select[^>]*(?:id="([^"]*)")?[^>]*(?:name="([^"]*)")?[^>]*>([\s\S]*?)<\/select>/g;
     const allSelects: Record<string, { name: string; selectedValue: string; selectedText: string; options: string[] }> = {};
     let match;
@@ -1019,20 +1070,12 @@ export async function debugJobDetail(jobId: number): Promise<Record<string, unkn
       };
     }
 
-    // Also try to find the id/name by re-parsing with a better regex for both attrs
-    const selectRegex2 = /<select[^>]*?(id="[^"]*"|name="[^"]*")[^>]*?(id="[^"]*"|name="[^"]*")?[^>]*>/g;
-    const selectIds: string[] = [];
-    while ((match = selectRegex2.exec(html)) !== null) {
-      selectIds.push(match[0].substring(0, 200));
-    }
-
-    const detail = await fetchJobDetail(jobId);
+    const detail = await session.fetchJobDetail(jobId);
 
     return {
       jobId,
       htmlLength: html.length,
       allSelectFields: allSelects,
-      selectTags: selectIds.slice(0, 30),
       detailResult: {
         alt_status: detail.alt_status,
         alt_status_id: detail.alt_status_id,
@@ -1050,13 +1093,22 @@ export async function debugJobDetail(jobId: number): Promise<Record<string, unkn
   }
 }
 
-// ─── Debug: auto-find T-19 jobs and debug their alt_status ───────────────────
-
 export async function debugT19Status(): Promise<Record<string, unknown>> {
   try {
-    await login();
+    const config: PSALocationConfig = {
+      id: 't19',
+      name: 'T-19 Miami',
+      username: process.env.PSA_USERNAME || '',
+      password: process.env.PSA_PASSWORD || '',
+      baseUrl: process.env.PSA_BASE_URL || 'https://uwrg.psarcweb.com/PSAWeb',
+      schema: process.env.PSA_SCHEMA || '1022',
+      territoryFilter: '19',
+      yearFilter: '26',
+    };
 
-    // Fetch first page to find T-19 jobs with their IDs
+    const session = new PSASession(config);
+    await session.login();
+
     const formData: Record<string, string | number> = {
       option: 'Open',
       iDisplayStart: 0,
@@ -1072,13 +1124,12 @@ export async function debugT19Status(): Promise<Record<string, unknown>> {
       formData[`mDataProp_${i}`] = `col${i}`;
     }
 
-    const body = await psaPost('/Job/Job/ListFilter', formData);
+    const body = await session.psaPost('/Job/Job/ListFilter', formData);
     const data = JSON.parse(body);
 
-    // Find T-19 jobs
     const t19Jobs = (data.aaData || [])
       .filter((row: string[]) => (row[0] || '').startsWith('19-'))
-      .slice(0, 3) // Just debug 3 jobs
+      .slice(0, 3)
       .map((row: string[]) => ({
         jobNumber: row[0],
         clientName: row[1],
@@ -1090,7 +1141,6 @@ export async function debugT19Status(): Promise<Record<string, unknown>> {
       return { error: 'No T-19 jobs found in first 100 open jobs' };
     }
 
-    // Debug each one
     const results = [];
     for (const job of t19Jobs) {
       const detail = await debugJobDetail(job.jobId);
@@ -1102,55 +1152,10 @@ export async function debugT19Status(): Promise<Record<string, unknown>> {
 
     return {
       nodeVersion: process.version,
-      cookieCount: sessionCookies.length,
-      cookieNames: sessionCookies.map(c => c.split('=')[0]),
       t19JobsFound: t19Jobs.length,
       results,
     };
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };
-  }
-}
-
-// ─── Discovery / Debug (used by /api/psa-test route) ─────────────────────────
-
-export async function testPSAConnection(): Promise<{
-  authenticated: boolean;
-  jobCount?: number;
-  sampleJobs?: string[];
-  authError?: string;
-}> {
-  try {
-    await login();
-
-    // Quick test — fetch first page of jobs
-    const formData: Record<string, string | number> = {
-      option: 'Open',
-      iDisplayStart: 0,
-      iDisplayLength: 5,
-      sEcho: 1,
-      iColumns: 11,
-      iSortCol_0: 8,
-      sSortDir_0: 'desc',
-      iSortingCols: 1,
-      mDataProp_10: 'id',
-    };
-    for (let i = 0; i < 10; i++) {
-      formData[`mDataProp_${i}`] = `col${i}`;
-    }
-
-    const body = await psaPost('/Job/Job/ListFilter', formData);
-    const data = JSON.parse(body);
-
-    return {
-      authenticated: true,
-      jobCount: data.iTotalRecords || 0,
-      sampleJobs: (data.aaData || []).slice(0, 5).map((r: string[]) => `${r[0]} | ${r[1]} | ${r[9]}`),
-    };
-  } catch (e) {
-    return {
-      authenticated: false,
-      authError: e instanceof Error ? e.message : String(e),
-    };
   }
 }

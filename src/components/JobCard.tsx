@@ -29,7 +29,7 @@ function CheckBadge({ present }: { present: boolean }) {
 
 export default function JobCard({ scoredJob }: { scoredJob: ScoredJob }) {
   const [expanded, setExpanded] = useState(false);
-  const { job, score, rank, iicrcItems, ticketItems, upsellItems, ticketExpansionItems, outreachTips } = scoredJob;
+  const { job, score, rank, iicrcItems, ticketItems, upsellItems, ticketExpansionItems } = scoredJob;
 
   const daysOpen = Math.floor((Date.now() - new Date(job.openedDate).getTime()) / 86400000);
   const daysSinceActivity = Math.floor((Date.now() - new Date(job.lastActivityDate).getTime()) / 86400000);
@@ -179,34 +179,37 @@ export default function JobCard({ scoredJob }: { scoredJob: ScoredJob }) {
                 )}
               </div>
 
-              {/* Commercial Outreach Tips */}
-              {outreachTips.length > 0 && (
-                <div className="mt-4">
-                  <h4 className="text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wide">Commercial Outreach</h4>
-                  <div className="space-y-1">
-                    {outreachTips.map((tip, i) => (
-                      <div key={i} className="flex items-start gap-2 text-xs">
-                        <span className="text-cyan-400 shrink-0 mt-0.5">&rarr;</span>
-                        <span className="text-cyan-300">{tip.label}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
               {/* People */}
               <h4 className="text-xs font-semibold text-slate-300 mt-4 mb-2 uppercase tracking-wide">Assigned</h4>
               <div className="space-y-1 text-xs">
-                <div className="flex items-center gap-2">
-                  <User className="w-3 h-3 text-slate-500" />
-                  <span className="text-slate-400">Tech:</span>
-                  <span className="text-white">{job.assignedTech}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <User className="w-3 h-3 text-slate-500" />
-                  <span className="text-slate-400">BD:</span>
-                  <span className="text-white">{job.businessDev}</span>
-                </div>
+                {job.assignedTech && (
+                  <div className="flex items-center gap-2">
+                    <User className="w-3 h-3 text-slate-500" />
+                    <span className="text-slate-400">Tech:</span>
+                    <span className="text-white">{job.assignedTech}</span>
+                  </div>
+                )}
+                {job.projectManager && (
+                  <div className="flex items-center gap-2">
+                    <User className="w-3 h-3 text-slate-500" />
+                    <span className="text-slate-400">PM:</span>
+                    <span className="text-white">{job.projectManager}</span>
+                  </div>
+                )}
+                {job.estimator && (
+                  <div className="flex items-center gap-2">
+                    <User className="w-3 h-3 text-slate-500" />
+                    <span className="text-slate-400">Estimator:</span>
+                    <span className="text-white">{job.estimator}</span>
+                  </div>
+                )}
+                {job.businessDev && (
+                  <div className="flex items-center gap-2">
+                    <User className="w-3 h-3 text-slate-500" />
+                    <span className="text-slate-400">Source:</span>
+                    <span className="text-white">{job.businessDev}</span>
+                  </div>
+                )}
               </div>
 
               {/* Contacts */}

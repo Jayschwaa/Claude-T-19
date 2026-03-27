@@ -1,6 +1,7 @@
 import { DataAdapter, Job } from './types';
 import { generateMockJobs } from './mock-data';
-import { createPSAAdapter } from './psa-adapter';
+import { createPSAAdapter, createPSAAdapterForConfig } from './psa-adapter';
+import { PSALocationConfig } from './psa-config';
 
 let cachedMockJobs: Job[] | null = null;
 
@@ -91,4 +92,65 @@ export function createAdapter(): DataAdapter {
 
   console.log('[Adapter] Using mock adapter (demo data)');
   return new MockAdapter();
+}
+
+/**
+ * Create an adapter for a specific PSA location configuration.
+ */
+export function createAdapterForLocation(config: PSALocationConfig): DataAdapter {
+  console.log(`[Adapter] Creating PSA adapter for location: ${config.name}`);
+  return new SafePSAAdapterForLocation(config);
+}
+
+/**
+ * Wraps location-specific PSA adapter with SafePSAAdapter pattern.
+ */
+class SafePSAAdapterForLocation implements DataAdapter {
+  private psa = createPSAAdapterForConfig(this.config);
+  private psaJobsReady: Job[] | null = null;
+  private psaLoadStarted = false;
+
+  constructor(private config: PSALocationConfig) {}
+
+  private startBackgroundLoad(): void {
+    if (this.psaLoadStarted) return;
+    this.psaLoadStarted = true;
+    console.log(`[PSA:${this.config.id}] Starting background data load...`);
+    this.psa.getJobs().then(
+      (jobs) => {
+        this.psaJobsReady = jobs;
+        console.log(`[PSA:${this.config.id}] Background load complete: ${jobs.length} jobs`);
+      },
+      (err) => {
+        console.error(`[PSA:${this.config.id}] Background load failed:`, err);
+        this.psaLoadStarted = false;
+      }
+    );
+  }
+
+  async getJobs(): Promise<Job[]> {
+    if (this.psaJobsReady) {
+      console.log(`[PSA:${this.config.id}] Serving ${this.psaJobsReady.length} cached PSA jobs`);
+      return this.psaJobsReady;
+    }
+
+    this.startBackgroundLoad();
+
+    try {
+      const jobs = await withTimeout(this.psa.getJobs(), 600000, `PSA getJobs [${this.config.id}]`);
+      this.psaJobsReady = jobs;
+      console.log(`[PSA:${this.config.id}] Got ${jobs.length} jobs from PSA`);
+      return jobs;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[PSA:${this.config.id}] Failed to fetch jobs: ${msg}`);
+      this.psaLoadStarted = false;
+      throw new Error(`PSA data not available for ${this.config.name}: ${msg}`);
+    }
+  }
+
+  async getJob(id: string): Promise<Job | null> {
+    const jobs = await this.getJobs();
+    return jobs.find(j => j.id === id || j.jobNumber === id) || null;
+  }
 }

@@ -520,6 +520,8 @@ export function generateMockJobs(): Job[] {
         priorityOverride: 0,
         // People
         assignedTech: randomElement(technicians),
+        projectManager: '',
+        estimator: '',
         businessDev: randomElement(businessDevs),
       };
 

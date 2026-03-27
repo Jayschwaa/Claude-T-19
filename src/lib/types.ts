@@ -79,6 +79,8 @@ export interface Job {
 
   // People
   assignedTech: string;
+  projectManager: string;
+  estimator: string;
   businessDev: string;    // BD / job source
 }
 
@@ -155,4 +157,12 @@ export interface DashboardSummary {
 export interface DataAdapter {
   getJobs(): Promise<Job[]>;
   getJob(id: string): Promise<Job | null>;
+}
+
+// Multi-location dashboard data
+export interface LocationData {
+  id: string;
+  name: string;
+  scoredJobs: ScoredJob[];
+  summary: DashboardSummary;
 }
