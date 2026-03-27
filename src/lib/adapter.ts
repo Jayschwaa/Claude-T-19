@@ -106,11 +106,13 @@ export function createAdapterForLocation(config: PSALocationConfig): DataAdapter
  * Wraps location-specific PSA adapter with SafePSAAdapter pattern.
  */
 class SafePSAAdapterForLocation implements DataAdapter {
-  private psa = createPSAAdapterForConfig(this.config);
+  private psa: DataAdapter;
   private psaJobsReady: Job[] | null = null;
   private psaLoadStarted = false;
 
-  constructor(private config: PSALocationConfig) {}
+  constructor(private config: PSALocationConfig) {
+    this.psa = createPSAAdapterForConfig(config);
+  }
 
   private startBackgroundLoad(): void {
     if (this.psaLoadStarted) return;
