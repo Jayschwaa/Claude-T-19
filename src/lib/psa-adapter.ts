@@ -325,10 +325,24 @@ class PSASession {
     }
     detail.referrer = extractSelectValue(html, 'Entity_ReferrerID');
 
-    detail.projectManager = extractSelectValue(html, 'Entity_ProjectManagerID');
-    detail.estimator = extractSelectValue(html, 'Entity_EstimatorID');
-    if (!detail.projectManager) detail.projectManager = extractSelectValue(html, 'Entity_PMID');
-    if (!detail.estimator) detail.estimator = extractSelectValue(html, 'Entity_SalesPersonID');
+    // Log all Entity_ select fields for debugging people/roles
+    const entitySelectRegex = /<select[^>]*?id="(Entity_[^"]*?)"[^>]*>([\s\S]*?)<\/select>/g;
+    let entityMatch;
+    const entityFields: Record<string, string> = {};
+    const htmlCopy = html; // don't mutate
+    while ((entityMatch = entitySelectRegex.exec(htmlCopy)) !== null) {
+      const fieldId = entityMatch[1];
+      const sel = findSelectedOption(entityMatch[2]);
+      if (sel && sel.text && sel.text !== '-- Not Set --' && sel.text !== '-- Select --') {
+        entityFields[fieldId] = sel.text;
+      }
+    }
+    console.log(`[PSA:${this.config.id}] Entity selects for job: ${JSON.stringify(entityFields)}`);
+
+    // Map known PSA fields to people roles
+    // These field names may vary by PSA configuration - log above helps discover correct ones
+    detail.projectManager = entityFields['Entity_ProjectManagerID'] || entityFields['Entity_PMID'] || '';
+    detail.estimator = entityFields['Entity_EstimatorID'] || entityFields['Entity_SalesPersonID'] || '';
 
     // Lifecycle dates
     const dateDescs = html.matchAll(/JobDates\[(\d+)\]\.DateTypeDescription"[^>]*value="([^"]*)"/g);
@@ -516,9 +530,12 @@ class PSASession {
       text: n.note || n.subject || '',
     }));
 
-    // Revenue
-    const estimateAmount = financial?.revenue_estimate || financial?.revenue_actual || 0;
+    // Revenue — try financial table first, then detail page's RevenueDisplay as fallback
+    const estimateAmount = financial?.revenue_estimate || financial?.revenue_actual || detail?.revenuedisplay || 0;
     const supplementAmount = 0;
+    if (estimateAmount > 0) {
+      console.log(`[PSA:${this.config.id}] Revenue for ${raw.job_number}: $${estimateAmount} (fin_est=${financial?.revenue_estimate}, fin_act=${financial?.revenue_actual}, detail_rev=${detail?.revenuedisplay})`);
+    }
 
     // Type
     const type = mapJobTypeCode(raw.job_type_code || detail?.job_type || '');
@@ -710,7 +727,7 @@ class PSASession {
       priorityOverride: 0,
       assignedTech: raw.assigned_to || '',
       projectManager: detail?.projectManager || '',
-      estimator: detail?.estimator || detail?.team || '',
+      estimator: detail?.estimator || '',
       businessDev: detail?.referrer || '',
     };
   }
@@ -1086,6 +1103,8 @@ export async function debugJobDetail(jobId: number): Promise<Record<string, unkn
         referrer: detail.referrer,
         team: detail.team,
         location: detail.location,
+        projectManager: detail.projectManager,
+        estimator: detail.estimator,
       },
     };
   } catch (e) {
