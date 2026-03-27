@@ -976,7 +976,7 @@ export function createPSAAdapter(): DataAdapter {
   // Default: uses T-19 config from env vars
   return createPSAAdapterForConfig({
     id: 't19',
-    name: 'T-19 Miami',
+    name: 'T-19 Pompano',
     username: process.env.PSA_USERNAME || '',
     password: process.env.PSA_PASSWORD || '',
     baseUrl: process.env.PSA_BASE_URL || 'https://uwrg.psarcweb.com/PSAWeb',
@@ -1001,7 +1001,7 @@ export async function testPSAConnection(): Promise<{
   try {
     const config: PSALocationConfig = {
       id: 't19',
-      name: 'T-19 Miami',
+      name: 'T-19 Pompano',
       username: process.env.PSA_USERNAME || '',
       password: process.env.PSA_PASSWORD || '',
       baseUrl: process.env.PSA_BASE_URL || 'https://uwrg.psarcweb.com/PSAWeb',
@@ -1048,7 +1048,7 @@ export async function debugJobDetail(jobId: number): Promise<Record<string, unkn
   try {
     const config: PSALocationConfig = {
       id: 't19',
-      name: 'T-19 Miami',
+      name: 'T-19 Pompano',
       username: process.env.PSA_USERNAME || '',
       password: process.env.PSA_PASSWORD || '',
       baseUrl: process.env.PSA_BASE_URL || 'https://uwrg.psarcweb.com/PSAWeb',
@@ -1116,7 +1116,7 @@ export async function debugT19Status(): Promise<Record<string, unknown>> {
   try {
     const config: PSALocationConfig = {
       id: 't19',
-      name: 'T-19 Miami',
+      name: 'T-19 Pompano',
       username: process.env.PSA_USERNAME || '',
       password: process.env.PSA_PASSWORD || '',
       baseUrl: process.env.PSA_BASE_URL || 'https://uwrg.psarcweb.com/PSAWeb',
