@@ -869,11 +869,11 @@ class PSASession {
         !d.includes('demo') && !d.includes('drying') && !d.includes('pack') &&
         !d.includes('estimate')
       ) || d.includes('close out') || d.includes('job close') || d.includes('final close') ||
-        d.includes('production closed') || d.includes('accounting closed');
+        d.includes('production closed');
       if (isFullJobComplete) {
         completedDate = completedDate || parseDateStr(val);
       }
-      if (d.includes('invoic')) {
+      if (d.includes('invoic') || d.includes('accounting closed')) {
         invoicedDate = invoicedDate || parseDateStr(val);
       }
     }
