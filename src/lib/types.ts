@@ -83,6 +83,9 @@ export interface Job {
   opsManager: string;
   estimator: string;
   businessDev: string;    // BD / job source
+
+  // Debug / PSA raw
+  psaAltStatus: string;   // Raw alt_status from PSA for debugging
 }
 
 // Scoring

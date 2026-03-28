@@ -19,6 +19,7 @@ export async function GET() {
       return {
         jobNumber: j.jobNumber,
         status: j.status,
+        psaAltStatus: j.psaAltStatus,
         customer: j.customerName,
         revenue: j.estimateAmount,
         openedDate: j.openedDate,
