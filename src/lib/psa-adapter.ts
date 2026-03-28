@@ -1030,7 +1030,21 @@ class PSASession {
     const openJobs = await this.fetchJobsByOption('Open', 100);
     console.log(`[PSA:${this.config.id}] Total open jobs: ${openJobs.length}`);
 
-    const allJobs = openJobs;
+    // Also fetch recent closed jobs — PSA moves completed jobs to "Closed" even if not invoiced
+    // We include them and let the post-enrich filter remove completed+invoiced ones
+    console.log(`[PSA:${this.config.id}] Fetching recent closed jobs...`);
+    const closedJobs = await this.fetchRecentClosedJobs(100);
+    console.log(`[PSA:${this.config.id}] Recent closed jobs (filtered): ${closedJobs.length}`);
+
+    const seenIds = new Set(openJobs.map(j => j.job_id));
+    const allJobs = [...openJobs];
+    for (const j of closedJobs) {
+      if (!seenIds.has(j.job_id)) {
+        allJobs.push(j);
+        seenIds.add(j.job_id);
+      }
+    }
+    console.log(`[PSA:${this.config.id}] Combined: ${allJobs.length} (${openJobs.length} open + ${allJobs.length - openJobs.length} closed)`);
 
     // Log sample job numbers for debugging format differences across locations
     if (allJobs.length > 0) {
@@ -1099,7 +1113,8 @@ class PSASession {
 
 // ─── Data Mapping Functions (static, used by all sessions) ───────────────────
 
-const EXCLUDED_PSA_TYPES = new Set(['STR', 'PLM']);
+// No longer excluding STR/PLM — user wants to see all job types including plumbing and structural
+const EXCLUDED_PSA_TYPES = new Set<string>();
 
 function mapJobTypeCode(code: string): JobType {
   const c = (code || '').toUpperCase().trim();
