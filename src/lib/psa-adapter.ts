@@ -357,6 +357,66 @@ class PSASession {
     return res.text();
   }
 
+  // ─── Column Mapping ───────────────────────────────────────────────────────
+  // PSA returns different column orders depending on schema/configuration.
+  // T-19 (schema 1022): [job_number, client, contact, insurance, address, state, city, assigned_to, date, status, id]
+  // Omaha (schema 1520): [date, job_number, client, address, insurance, ??, assigned_to, amount, status, contact, id]
+  // We auto-detect by checking if row[0] looks like a date vs a job number.
+
+  private parseRowToJob(row: string[]): PSARawJob {
+    const isDateFirst = /^\d{1,2}\/\d{1,2}\/\d{4}/.test(row[0]);
+
+    if (isDateFirst) {
+      // Omaha layout: [date, job_number, client, address, insurance, alt_status, assigned_to, amount, status, contact, id]
+      const addr = (row[3] || '');
+      // Parse city from address like "308 S 19th, Omaha, NE, 68102"
+      const addrParts = addr.split(',').map(s => s.trim());
+      const city = addrParts.length >= 2 ? addrParts[addrParts.length - 3] || addrParts[1] || '' : '';
+      const state = addrParts.length >= 3 ? addrParts[addrParts.length - 2] || '' : '';
+
+      return {
+        job_number: row[1] || '',
+        client_name: row[2] || '',
+        contact_name: (row[9] || '').replace(/&nbsp;/g, '').trim(),
+        insurance_info: (row[4] || '').replace(/&nbsp;/g, '').trim(),
+        address: addr,
+        state: state,
+        city: city,
+        assigned_to: row[6] || '',
+        date: row[0] || '',
+        status: row[8] || '',
+        job_id: parseInt(row[10]) || 0,
+        territory: '', year: '', seq: '', job_type_code: '',
+      };
+    } else {
+      // T-19 Pompano layout: [job_number, client, contact, insurance, address, state, city, assigned_to, date, status, id]
+      return {
+        job_number: row[0] || '',
+        client_name: row[1] || '',
+        contact_name: row[2] || '',
+        insurance_info: (row[3] || '').replace(/&nbsp;/g, '').trim(),
+        address: row[4] || '',
+        state: row[5] || '',
+        city: row[6] || '',
+        assigned_to: row[7] || '',
+        date: row[8] || '',
+        status: row[9] || '',
+        job_id: parseInt(row[10]) || 0,
+        territory: '', year: '', seq: '', job_type_code: '',
+      };
+    }
+  }
+
+  private parseJobNumber(job: PSARawJob): void {
+    const parts = job.job_number.split('-');
+    if (parts.length >= 4) {
+      job.territory = parts[0];
+      job.year = parts[1];
+      job.seq = parts[2];
+      job.job_type_code = parts[3].split(';')[0];
+    }
+  }
+
   // ─── Data Fetching Methods (use session's HTTP methods) ──────────────────
 
   async fetchAllOpenJobs(pageSize = 100): Promise<PSARawJob[]> {
@@ -396,18 +456,8 @@ class PSASession {
         const retryData = JSON.parse(retryBody);
         total = retryData.iTotalDisplayRecords;
         for (const row of retryData.aaData) {
-          const job: PSARawJob = {
-            job_number: row[0], client_name: row[1], contact_name: row[2],
-            insurance_info: (row[3] || '').replace(/&nbsp;/g, '').trim(),
-            address: row[4], state: row[5], city: row[6],
-            assigned_to: row[7], date: row[8], status: row[9], job_id: row[10],
-            territory: '', year: '', seq: '', job_type_code: '',
-          };
-          const parts = job.job_number.split('-');
-          if (parts.length >= 4) {
-            job.territory = parts[0]; job.year = parts[1];
-            job.seq = parts[2]; job.job_type_code = parts[3].split(';')[0];
-          }
+          const job = this.parseRowToJob(row);
+          this.parseJobNumber(job);
           allJobs.push(job);
         }
         offset += pageSize;
@@ -425,32 +475,8 @@ class PSASession {
       }
 
       for (const row of data.aaData) {
-        const job: PSARawJob = {
-          job_number: row[0],
-          client_name: row[1],
-          contact_name: row[2],
-          insurance_info: (row[3] || '').replace(/&nbsp;/g, '').trim(),
-          address: row[4],
-          state: row[5],
-          city: row[6],
-          assigned_to: row[7],
-          date: row[8],
-          status: row[9],
-          job_id: row[10],
-          territory: '',
-          year: '',
-          seq: '',
-          job_type_code: '',
-        };
-
-        // Parse job number: territory-year-seq-type
-        const parts = job.job_number.split('-');
-        if (parts.length >= 4) {
-          job.territory = parts[0];
-          job.year = parts[1];
-          job.seq = parts[2];
-          job.job_type_code = parts[3].split(';')[0];
-        }
+        const job = this.parseRowToJob(row);
+        this.parseJobNumber(job);
 
         allJobs.push(job);
       }
