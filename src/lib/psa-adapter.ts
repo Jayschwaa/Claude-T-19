@@ -868,7 +868,8 @@ class PSASession {
         !d.includes('mitig') && !d.includes('phase') && !d.includes('clear') &&
         !d.includes('demo') && !d.includes('drying') && !d.includes('pack') &&
         !d.includes('estimate')
-      ) || d.includes('close out') || d.includes('job close') || d.includes('final close');
+      ) || d.includes('close out') || d.includes('job close') || d.includes('final close') ||
+        d.includes('production closed') || d.includes('accounting closed');
       if (isFullJobComplete) {
         completedDate = completedDate || parseDateStr(val);
       }
@@ -1035,7 +1036,7 @@ class PSASession {
     // Also fetch recent closed jobs — PSA moves completed jobs to "Closed" even if not invoiced
     // We include them and let the post-enrich filter remove completed+invoiced ones
     console.log(`[PSA:${this.config.id}] Fetching recent closed jobs...`);
-    const closedJobs = await this.fetchRecentClosedJobs(300);
+    const closedJobs = await this.fetchRecentClosedJobs(500);
     console.log(`[PSA:${this.config.id}] Recent closed jobs (filtered): ${closedJobs.length}`);
 
     const seenIds = new Set(openJobs.map(j => j.job_id));
