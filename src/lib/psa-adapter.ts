@@ -1030,22 +1030,7 @@ class PSASession {
     const openJobs = await this.fetchJobsByOption('Open', 100);
     console.log(`[PSA:${this.config.id}] Total open jobs: ${openJobs.length}`);
 
-    // Also fetch recent closed jobs to capture "complete not invoiced" ones
-    // Only fetch first page (most recent 100) to avoid pulling thousands of historical jobs
-    console.log(`[PSA:${this.config.id}] Fetching recent closed jobs...`);
-    const closedJobs = await this.fetchRecentClosedJobs(100);
-    console.log(`[PSA:${this.config.id}] Recent closed jobs: ${closedJobs.length}`);
-
-    // Combine: all open jobs + closed jobs (de-duped by job_id)
-    const seenIds = new Set(openJobs.map(j => j.job_id));
-    const allJobs = [...openJobs];
-    for (const j of closedJobs) {
-      if (!seenIds.has(j.job_id)) {
-        allJobs.push(j);
-        seenIds.add(j.job_id);
-      }
-    }
-    console.log(`[PSA:${this.config.id}] Combined total: ${allJobs.length}`);
+    const allJobs = openJobs;
 
     // Log sample job numbers for debugging format differences across locations
     if (allJobs.length > 0) {
