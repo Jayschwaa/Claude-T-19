@@ -847,22 +847,16 @@ class PSASession {
       altStatus.includes('negotiat') || altStatus.includes('in process');
     const altStatusIndicatesWIP = altStatus.includes('appointment') || altStatus.includes('hold');
 
-    if (completedDate) {
+    // Alt status "Complete/Paid/Closed/etc." overrides date-based logic
+    // because many completed jobs still have productionStartDate but no completedDate
+    if (completedDate || altStatusIndicatesCompleted) {
       status = 'Completed';
-    } else if (productionStartDate) {
+    } else if (productionStartDate || altStatusIndicatesWIP) {
       status = 'WIP';
     } else if (approvedDate || estimateSubmittedDate || altStatusIndicatesSales) {
       status = 'Sales';
     } else if (inspectedDate || estimateCompletedDate) {
       status = 'Scoped';
-    } else if (receivedDate || openedDate) {
-      if (altStatusIndicatesWIP) {
-        status = 'WIP';
-      } else if (altStatusIndicatesCompleted) {
-        status = 'Completed';
-      } else {
-        status = 'Received';
-      }
     } else {
       status = 'Received';
     }
