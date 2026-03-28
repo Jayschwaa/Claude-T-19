@@ -25,11 +25,16 @@ interface TeamMember {
 // Keyed by lowercase name substring for fuzzy matching
 const TEAM_REGISTRY: Record<string, Record<string, TeamMember>> = {
   t19: {
-    'david kays': { role: 'pm', displayRole: 'Project Manager' },
-    'kays': { role: 'pm', displayRole: 'Project Manager' },
-    'alejandra abel': { role: 'bd', displayRole: 'Business Developer / Estimator' },
-    'abel': { role: 'bd', displayRole: 'Business Developer / Estimator' },
-    'alejandra': { role: 'bd', displayRole: 'Business Developer / Estimator' },
+    'david kays': { role: 'ops_manager', displayRole: 'Operations Manager' },
+    'kays': { role: 'ops_manager', displayRole: 'Operations Manager' },
+    'dave': { role: 'ops_manager', displayRole: 'Operations Manager' },
+    'alejandra abel': { role: 'ops_manager', displayRole: 'Operations Manager' },
+    'abel': { role: 'ops_manager', displayRole: 'Operations Manager' },
+    'alejandra': { role: 'ops_manager', displayRole: 'Operations Manager' },
+    'jose': { role: 'pm', displayRole: 'Manager' },
+    'natalie ramos': { role: 'bd', displayRole: 'Business Developer' },
+    'ramos': { role: 'bd', displayRole: 'Business Developer' },
+    'natalie': { role: 'bd', displayRole: 'Business Developer' },
     'natalia': { role: 'ops_manager', displayRole: 'Operations Manager' },
     'jondany gutierrez': { role: 'contents_manager', displayRole: 'Contents Manager' },
     'jondany': { role: 'contents_manager', displayRole: 'Contents Manager' },
@@ -622,8 +627,10 @@ class PSASession {
 
     for (const [name, key] of Object.entries(fieldMap)) {
       const escapedName = name.replace(/\./g, '\\.');
-      const regex = new RegExp(`name="${escapedName}"[^>]*value="([^"]*)"`, 'i');
-      const match = html.match(regex);
+      // Try name before value, then value before name (HTML attributes can appear in any order)
+      const regex1 = new RegExp(`name="${escapedName}"[^>]*value="([^"]*)"`, 'i');
+      const regex2 = new RegExp(`value="([^"]*)"[^>]*name="${escapedName}"`, 'i');
+      const match = html.match(regex1) || html.match(regex2);
       if (match && match[1]) {
         financial[key] = parseFloat(match[1]) || 0;
       }
@@ -747,8 +754,13 @@ class PSASession {
       text: n.note || n.subject || '',
     }));
 
-    // Revenue — try financial table first, then detail page's RevenueDisplay as fallback
-    const estimateAmount = financial?.revenue_estimate || financial?.revenue_actual || detail?.revenuedisplay || 0;
+    // Revenue — use first non-zero value: financial estimate > financial actual > detail revenue > detail completed
+    const estimateAmount =
+      (financial?.revenue_estimate && financial.revenue_estimate > 0 ? financial.revenue_estimate : 0) ||
+      (financial?.revenue_actual && financial.revenue_actual > 0 ? financial.revenue_actual : 0) ||
+      (detail?.revenuedisplay && detail.revenuedisplay > 0 ? detail.revenuedisplay : 0) ||
+      (detail?.completeddisplay && detail.completeddisplay > 0 ? detail.completeddisplay : 0) ||
+      0;
     const supplementAmount = 0;
     if (estimateAmount > 0) {
       console.log(`[PSA:${this.config.id}] Revenue for ${raw.job_number}: $${estimateAmount} (fin_est=${financial?.revenue_estimate}, fin_act=${financial?.revenue_actual}, detail_rev=${detail?.revenuedisplay})`);
@@ -815,7 +827,8 @@ class PSASession {
     let status: WorkflowStatus;
     const altStatus = (detail?.alt_status || '').toLowerCase();
     const altStatusIndicatesCompleted = altStatus.includes('paid') || altStatus.includes('collections') ||
-      altStatus.includes('closed') || altStatus.includes('write off') || altStatus.includes('invoiced');
+      altStatus.includes('closed') || altStatus.includes('write off') || altStatus.includes('invoiced') ||
+      altStatus.includes('complete');
     const altStatusIndicatesSales = altStatus.includes('submitted') || altStatus.includes('review') ||
       altStatus.includes('negotiat') || altStatus.includes('in process');
     const altStatusIndicatesWIP = altStatus.includes('appointment') || altStatus.includes('hold');

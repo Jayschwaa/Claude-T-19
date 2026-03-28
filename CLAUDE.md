@@ -77,8 +77,10 @@ All PSA endpoints were reverse-engineered from browser network traffic. There is
 PSA does NOT have structured fields for PM/Estimator/BD roles. The `TEAM_REGISTRY` in `psa-adapter.ts` maps known employee names → roles. The `resolveRoles()` function combines `assigned_to` + notes employees to figure out who's on each job.
 
 ### Current T-19 Team
-- **David Kays** — Project Manager
-- **Alejandra Abel** — Business Developer / Estimator
+- **David Kays** — Operations Manager
+- **Alejandra Abel** — Operations Manager
+- **Jose** — Manager
+- **Natalie Ramos** — Business Developer
 - **Natalia** — Operations Manager
 - **Jondany Gutierrez** — Contents Manager
 - **Luis Knight, Richard Ali, Angel Baloa, Artsem Babrouski, Rovin Corea-Lazo** — Technicians
