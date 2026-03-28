@@ -494,6 +494,50 @@ class PSASession {
     return allJobs;
   }
 
+  /**
+   * Fetch only the most recent closed jobs (single page, no pagination).
+   * Pre-filters by territory and year to avoid enriching irrelevant historical jobs.
+   */
+  async fetchRecentClosedJobs(pageSize = 100): Promise<PSARawJob[]> {
+    const formData: Record<string, string | number> = {
+      option: 'Closed',
+      iDisplayStart: 0,
+      iDisplayLength: pageSize,
+      sEcho: 1,
+      iColumns: 11,
+      iSortCol_0: 8,
+      sSortDir_0: 'desc',
+      iSortingCols: 1,
+      mDataProp_10: 'id',
+    };
+    for (let i = 0; i < 10; i++) {
+      formData[`mDataProp_${i}`] = `col${i}`;
+    }
+
+    const body = await this.psaPost('/Job/Job/ListFilter', formData);
+    if (body.trimStart().startsWith('<!DOCTYPE') || body.trimStart().startsWith('<html')) {
+      console.warn(`[PSA:${this.config.id}] Closed jobs returned HTML — skipping`);
+      return [];
+    }
+
+    const data = JSON.parse(body);
+    console.log(`[PSA:${this.config.id}] Closed jobs total in PSA: ${data.iTotalDisplayRecords}, fetched first ${Math.min(pageSize, data.aaData?.length || 0)}`);
+
+    const jobs: PSARawJob[] = [];
+    for (const row of (data.aaData || [])) {
+      const job = this.parseRowToJob(row);
+      this.parseJobNumber(job);
+      // Pre-filter: only keep jobs matching territory and year
+      if (this.config.territoryFilter && job.territory !== this.config.territoryFilter) continue;
+      if (this.config.yearFilter && job.year !== this.config.yearFilter) continue;
+      if (EXCLUDED_PSA_TYPES.has(job.job_type_code.toUpperCase())) continue;
+      jobs.push(job);
+    }
+
+    console.log(`[PSA:${this.config.id}] Closed jobs after territory/year filter: ${jobs.length}`);
+    return jobs;
+  }
+
   async fetchJobDetail(jobId: number): Promise<PSAJobDetail> {
     const html = await this.psaGet(`/Job/Job/Edit/${jobId}`);
 
@@ -986,10 +1030,11 @@ class PSASession {
     const openJobs = await this.fetchJobsByOption('Open', 100);
     console.log(`[PSA:${this.config.id}] Total open jobs: ${openJobs.length}`);
 
-    // Also fetch closed jobs to capture "complete not invoiced" ones
-    console.log(`[PSA:${this.config.id}] Fetching closed jobs...`);
-    const closedJobs = await this.fetchJobsByOption('Closed', 100);
-    console.log(`[PSA:${this.config.id}] Total closed jobs: ${closedJobs.length}`);
+    // Also fetch recent closed jobs to capture "complete not invoiced" ones
+    // Only fetch first page (most recent 100) to avoid pulling thousands of historical jobs
+    console.log(`[PSA:${this.config.id}] Fetching recent closed jobs...`);
+    const closedJobs = await this.fetchRecentClosedJobs(100);
+    console.log(`[PSA:${this.config.id}] Recent closed jobs: ${closedJobs.length}`);
 
     // Combine: all open jobs + closed jobs (de-duped by job_id)
     const seenIds = new Set(openJobs.map(j => j.job_id));
