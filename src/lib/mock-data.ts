@@ -521,6 +521,7 @@ export function generateMockJobs(): Job[] {
         // People
         assignedTech: randomElement(technicians),
         projectManager: '',
+        opsManager: '',
         estimator: '',
         businessDev: randomElement(businessDevs),
       };

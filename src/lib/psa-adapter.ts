@@ -85,8 +85,8 @@ function resolveRoles(
   locationId: string,
   assignedTo: string,
   noteEmployees: string[]
-): { tech: string; pm: string; estimator: string; bd: string } {
-  const result = { tech: '', pm: '', estimator: '', bd: '' };
+): { tech: string; pm: string; opsManager: string; estimator: string; bd: string } {
+  const result = { tech: '', pm: '', opsManager: '', estimator: '', bd: '' };
 
   // Collect all unique people on this job
   const allPeople = new Set<string>();
@@ -107,13 +107,14 @@ function resolveRoles(
     }
 
     switch (member.role) {
-      case 'pm':
       case 'ops_manager':
+        if (!result.opsManager) result.opsManager = person;
+        break;
+      case 'pm':
         if (!result.pm) result.pm = person;
         break;
       case 'bd':
       case 'estimator':
-        // Alejandra is both BD and Estimator
         if (!result.bd) result.bd = person;
         if (!result.estimator) result.estimator = person;
         break;
@@ -627,12 +628,24 @@ class PSASession {
 
     for (const [name, key] of Object.entries(fieldMap)) {
       const escapedName = name.replace(/\./g, '\\.');
-      // Try name before value, then value before name (HTML attributes can appear in any order)
-      const regex1 = new RegExp(`name="${escapedName}"[^>]*value="([^"]*)"`, 'i');
-      const regex2 = new RegExp(`value="([^"]*)"[^>]*name="${escapedName}"`, 'i');
-      const match = html.match(regex1) || html.match(regex2);
-      if (match && match[1]) {
-        financial[key] = parseFloat(match[1]) || 0;
+      // Also try with underscores (TotalRevenue_Estimate) and by id attribute
+      const escapedUnderscore = name.replace(/\./g, '_');
+      const regexes = [
+        new RegExp(`name="${escapedName}"[^>]*value="([^"]*)"`, 'i'),
+        new RegExp(`value="([^"]*)"[^>]*name="${escapedName}"`, 'i'),
+        new RegExp(`id="${escapedUnderscore}"[^>]*value="([^"]*)"`, 'i'),
+        new RegExp(`value="([^"]*)"[^>]*id="${escapedUnderscore}"`, 'i'),
+        new RegExp(`name="${escapedUnderscore}"[^>]*value="([^"]*)"`, 'i'),
+      ];
+      for (const regex of regexes) {
+        const match = html.match(regex);
+        if (match && match[1]) {
+          const val = parseFloat(match[1]) || 0;
+          if (val > 0) {
+            financial[key] = val;
+            break;
+          }
+        }
       }
     }
 
@@ -754,13 +767,14 @@ class PSASession {
       text: n.note || n.subject || '',
     }));
 
-    // Revenue — use first non-zero value: financial estimate > financial actual > detail revenue > detail completed
-    const estimateAmount =
-      (financial?.revenue_estimate && financial.revenue_estimate > 0 ? financial.revenue_estimate : 0) ||
-      (financial?.revenue_actual && financial.revenue_actual > 0 ? financial.revenue_actual : 0) ||
-      (detail?.revenuedisplay && detail.revenuedisplay > 0 ? detail.revenuedisplay : 0) ||
-      (detail?.completeddisplay && detail.completeddisplay > 0 ? detail.completeddisplay : 0) ||
-      0;
+    // Revenue — take the highest non-zero value across all sources
+    // Financial table and detail page can each have different amounts; the highest is most accurate
+    const estimateAmount = Math.max(
+      financial?.revenue_estimate || 0,
+      financial?.revenue_actual || 0,
+      detail?.revenuedisplay || 0,
+      detail?.completeddisplay || 0,
+    );
     const supplementAmount = 0;
     if (estimateAmount > 0) {
       console.log(`[PSA:${this.config.id}] Revenue for ${raw.job_number}: $${estimateAmount} (fin_est=${financial?.revenue_estimate}, fin_act=${financial?.revenue_actual}, detail_rev=${detail?.revenuedisplay})`);
@@ -857,7 +871,7 @@ class PSASession {
     const noteEmployees = psaNotes.map(n => n.employee).filter(Boolean);
     const roles = resolveRoles(this.config.id, raw.assigned_to || '', noteEmployees);
 
-    console.log(`[PSA:${this.config.id}] Job ${raw.job_number}: dates=[${Object.keys(dates).join(',')}] alt="${detail?.alt_status || ''}" → status="${status}" | roles: tech="${roles.tech}" pm="${roles.pm}" bd="${roles.bd}" est="${roles.estimator}" | assigned_to="${raw.assigned_to}" noteEmployees=[${[...new Set(noteEmployees)].join(', ')}]`);
+    console.log(`[PSA:${this.config.id}] Job ${raw.job_number}: dates=[${Object.keys(dates).join(',')}] alt="${detail?.alt_status || ''}" → status="${status}" | roles: tech="${roles.tech}" pm="${roles.pm}" ops="${roles.opsManager}" bd="${roles.bd}" est="${roles.estimator}" | assigned_to="${raw.assigned_to}" noteEmployees=[${[...new Set(noteEmployees)].join(', ')}]`);
 
     // Last activity from notes
     let lastActivityDate = openedDate;
@@ -961,6 +975,7 @@ class PSASession {
       priorityOverride: 0,
       assignedTech: roles.tech,
       projectManager: roles.pm,
+      opsManager: roles.opsManager,
       estimator: roles.estimator,
       businessDev: roles.bd,
     };

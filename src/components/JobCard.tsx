@@ -73,8 +73,9 @@ export default function JobCard({ scoredJob }: { scoredJob: ScoredJob }) {
                 {daysSinceActivity}d inactive
               </span>
             )}
-            <span className="text-slate-500">{job.assignedTech}</span>
-            <span className="text-slate-500">{job.businessDev}</span>
+            {job.opsManager && <span className="text-slate-500">{job.opsManager}</span>}
+            {job.assignedTech && <span className="text-slate-500">{job.assignedTech}</span>}
+            {job.businessDev && <span className="text-slate-500">{job.businessDev}</span>}
             <span className="truncate hidden md:inline">{job.city}</span>
           </div>
         </div>
@@ -187,6 +188,13 @@ export default function JobCard({ scoredJob }: { scoredJob: ScoredJob }) {
                     <User className="w-3 h-3 text-slate-500" />
                     <span className="text-slate-400">Tech:</span>
                     <span className="text-white">{job.assignedTech}</span>
+                  </div>
+                )}
+                {job.opsManager && (
+                  <div className="flex items-center gap-2">
+                    <User className="w-3 h-3 text-slate-500" />
+                    <span className="text-slate-400">Ops Mgr:</span>
+                    <span className="text-white">{job.opsManager}</span>
                   </div>
                 )}
                 {job.projectManager && (

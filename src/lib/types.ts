@@ -80,6 +80,7 @@ export interface Job {
   // People
   assignedTech: string;
   projectManager: string;
+  opsManager: string;
   estimator: string;
   businessDev: string;    // BD / job source
 }

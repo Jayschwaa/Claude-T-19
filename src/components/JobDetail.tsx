@@ -47,7 +47,8 @@ export default function JobDetail({ scoredJob }: { scoredJob: ScoredJob }) {
             <span>{job.insuranceCarrier}</span>
             {job.claimNumber && <span>Claim: {job.claimNumber}</span>}
           </div>
-          <div className="flex items-center gap-4 mt-2 text-sm">
+          <div className="flex items-center gap-4 mt-2 text-sm flex-wrap">
+            {job.opsManager && <span className="text-slate-400"><User className="w-3 h-3 inline mr-1" />Ops Mgr: <span className="text-white">{job.opsManager}</span></span>}
             <span className="text-slate-400"><User className="w-3 h-3 inline mr-1" />Tech: <span className="text-white">{job.assignedTech}</span></span>
             <span className="text-slate-400"><User className="w-3 h-3 inline mr-1" />BD: <span className="text-white">{job.businessDev}</span></span>
           </div>
