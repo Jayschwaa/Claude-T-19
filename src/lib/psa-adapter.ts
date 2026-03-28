@@ -418,6 +418,12 @@ class PSASession {
       const data = JSON.parse(body);
       total = data.iTotalDisplayRecords;
 
+      // Log first row to understand column mapping per location
+      if (offset === 0 && data.aaData && data.aaData.length > 0) {
+        const firstRow = data.aaData[0];
+        console.log(`[PSA:${this.config.id}] First row columns (${firstRow.length} cols): ${JSON.stringify(firstRow.slice(0, 12))}`);
+      }
+
       for (const row of data.aaData) {
         const job: PSARawJob = {
           job_number: row[0],
