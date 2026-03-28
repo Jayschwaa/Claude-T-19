@@ -525,6 +525,7 @@ export function generateMockJobs(): Job[] {
         estimator: '',
         businessDev: randomElement(businessDevs),
         psaAltStatus: '',
+        psaDateDescriptions: [],
       };
 
       jobs.push(job);

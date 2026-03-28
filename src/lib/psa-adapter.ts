@@ -1023,6 +1023,7 @@ class PSASession {
       estimator: roles.estimator,
       businessDev: roles.bd,
       psaAltStatus: detail?.alt_status || '',
+      psaDateDescriptions: Object.keys(detail?.dates || {}),
     };
   }
 

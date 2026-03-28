@@ -86,6 +86,7 @@ export interface Job {
 
   // Debug / PSA raw
   psaAltStatus: string;   // Raw alt_status from PSA for debugging
+  psaDateDescriptions: string[];  // Raw date type descriptions from PSA detail page
 }
 
 // Scoring
