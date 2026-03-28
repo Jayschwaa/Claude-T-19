@@ -926,16 +926,33 @@ class PSASession {
     const allJobs = await this.fetchAllOpenJobs(100);
     console.log(`[PSA:${this.config.id}] Total open jobs: ${allJobs.length}`);
 
+    // Log sample job numbers for debugging format differences across locations
+    if (allJobs.length > 0) {
+      const sample = allJobs.slice(0, 5).map(j => `${j.job_number} (t=${j.territory}, y=${j.year}, type=${j.job_type_code})`);
+      console.log(`[PSA:${this.config.id}] Sample job numbers: ${sample.join(' | ')}`);
+    }
+
     // Filter by territory (if configured) and year, excluding STR/PLM sub-jobs
     let filtered = allJobs;
     if (this.config.territoryFilter) {
       filtered = filtered.filter(j => j.territory === this.config.territoryFilter);
     }
-    filtered = filtered.filter(j => {
+    // Year filter: if yearFilter is set, apply it; if all jobs get filtered out,
+    // fall back to showing all jobs (handles different job number formats)
+    const yearFiltered = filtered.filter(j => {
       if (j.year !== this.config.yearFilter) return false;
       if (EXCLUDED_PSA_TYPES.has(j.job_type_code.toUpperCase())) return false;
       return true;
     });
+
+    if (yearFiltered.length === 0 && filtered.length > 0) {
+      // Year filter removed all jobs — likely different job number format
+      // Fall back to type filter only
+      console.warn(`[PSA:${this.config.id}] Year filter '${this.config.yearFilter}' removed all ${filtered.length} jobs. Falling back to no year filter.`);
+      filtered = filtered.filter(j => !EXCLUDED_PSA_TYPES.has(j.job_type_code.toUpperCase()));
+    } else {
+      filtered = yearFiltered;
+    }
 
     console.log(`[PSA:${this.config.id}] Filtered jobs: ${filtered.length}`);
 
