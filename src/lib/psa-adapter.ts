@@ -11,6 +11,131 @@ if (typeof process !== 'undefined') {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 }
 
+// ─── Team Role Registry ─────────────────────────────────────────────────────
+// PSA doesn't have structured PM/Estimator/BD fields — only assigned_to (tech).
+// We use a known team roster to map employee names to roles, then detect who's
+// on each job from (a) assigned_to and (b) notes employee field.
+type TeamRole = 'pm' | 'estimator' | 'bd' | 'ops_manager' | 'contents_manager' | 'tech';
+
+interface TeamMember {
+  role: TeamRole;
+  displayRole: string; // For logging
+}
+
+// Keyed by lowercase name substring for fuzzy matching
+const TEAM_REGISTRY: Record<string, Record<string, TeamMember>> = {
+  t19: {
+    'david kays': { role: 'pm', displayRole: 'Project Manager' },
+    'kays': { role: 'pm', displayRole: 'Project Manager' },
+    'alejandra abel': { role: 'bd', displayRole: 'Business Developer / Estimator' },
+    'abel': { role: 'bd', displayRole: 'Business Developer / Estimator' },
+    'alejandra': { role: 'bd', displayRole: 'Business Developer / Estimator' },
+    'natalia': { role: 'ops_manager', displayRole: 'Operations Manager' },
+    'jondany gutierrez': { role: 'contents_manager', displayRole: 'Contents Manager' },
+    'jondany': { role: 'contents_manager', displayRole: 'Contents Manager' },
+    'gutierrez': { role: 'contents_manager', displayRole: 'Contents Manager' },
+    'luis knight': { role: 'tech', displayRole: 'Technician' },
+    'knight': { role: 'tech', displayRole: 'Technician' },
+    'richard ali': { role: 'tech', displayRole: 'Technician' },
+    'angel baloa': { role: 'tech', displayRole: 'Technician' },
+    'baloa': { role: 'tech', displayRole: 'Technician' },
+    'artsem babrouski': { role: 'tech', displayRole: 'Technician' },
+    'artsem': { role: 'tech', displayRole: 'Technician' },
+    'rovin corea-lazo': { role: 'tech', displayRole: 'Technician' },
+    'rovin': { role: 'tech', displayRole: 'Technician' },
+    'corea': { role: 'tech', displayRole: 'Technician' },
+  },
+  omaha: {
+    // Will be populated as we discover the Omaha team
+  },
+};
+
+function lookupTeamMember(locationId: string, name: string): TeamMember | null {
+  if (!name) return null;
+  const registry = TEAM_REGISTRY[locationId] || {};
+  const lower = name.toLowerCase().trim();
+
+  // Exact match first
+  if (registry[lower]) return registry[lower];
+
+  // Try last name match
+  const parts = lower.split(/\s+/);
+  if (parts.length > 1) {
+    const lastName = parts[parts.length - 1];
+    if (registry[lastName]) return registry[lastName];
+  }
+
+  // Try first name match (less reliable, only for unique first names)
+  if (parts.length > 0 && registry[parts[0]]) {
+    return registry[parts[0]];
+  }
+
+  return null;
+}
+
+/**
+ * Given assigned_to + notes employees, figure out PM, BD, Estimator, and true Tech.
+ */
+function resolveRoles(
+  locationId: string,
+  assignedTo: string,
+  noteEmployees: string[]
+): { tech: string; pm: string; estimator: string; bd: string } {
+  const result = { tech: '', pm: '', estimator: '', bd: '' };
+
+  // Collect all unique people on this job
+  const allPeople = new Set<string>();
+  if (assignedTo) allPeople.add(assignedTo);
+  for (const emp of noteEmployees) {
+    if (emp && emp !== 'System' && emp.length > 1) allPeople.add(emp);
+  }
+
+  // Classify each person
+  for (const person of allPeople) {
+    const member = lookupTeamMember(locationId, person);
+    if (!member) {
+      // Unknown person — if they're the assigned_to, treat as tech
+      if (person === assignedTo && !result.tech) {
+        result.tech = person;
+      }
+      continue;
+    }
+
+    switch (member.role) {
+      case 'pm':
+      case 'ops_manager':
+        if (!result.pm) result.pm = person;
+        break;
+      case 'bd':
+      case 'estimator':
+        // Alejandra is both BD and Estimator
+        if (!result.bd) result.bd = person;
+        if (!result.estimator) result.estimator = person;
+        break;
+      case 'contents_manager':
+        // Jondany shows up as assigned_to on contents jobs — he's not a field tech
+        // but put him in tech slot since he manages that division's fieldwork
+        if (!result.tech) result.tech = person;
+        break;
+      case 'tech':
+        if (!result.tech) result.tech = person;
+        break;
+    }
+  }
+
+  // If assigned_to is a PM/BD (e.g. David Kays assigned to a job),
+  // don't put them in the tech slot — they're already in their correct role
+  if (assignedTo) {
+    const assignedMember = lookupTeamMember(locationId, assignedTo);
+    if (!assignedMember || assignedMember.role === 'tech' || assignedMember.role === 'contents_manager') {
+      // Actual tech or unknown — use as tech
+      if (!result.tech) result.tech = assignedTo;
+    }
+  }
+
+  return result;
+}
+
 // ─── PSA Session Class ───────────────────────────────────────────────────────
 
 class PSASession {
@@ -99,19 +224,44 @@ class PSASession {
     } else {
       // Check if the response body contains a Transfer URL
       const body = await loginRes.text();
+      console.log(`[PSA:${this.config.id}] Login response status=${loginRes.status}, body length=${body.length}, first 300 chars: ${body.substring(0, 300).replace(/\n/g, ' ')}`);
+
       const match = body.match(/href="([^"]*Transfer\?Token=[^"]*)"/);
       if (match) {
         transferUrl = match[1];
         if (!transferUrl.startsWith('http')) {
           transferUrl = `https://uwrg.psarcweb.com${transferUrl}`;
         }
-      } else if (loginRes.ok) {
-        // Login may have succeeded directly
-        console.log(`[PSA:${this.config.id}] Login succeeded directly (no transfer needed)`);
-        this.sessionExpires = Date.now() + this.SESSION_TTL;
-        return;
       } else {
-        throw new Error(`PSA login failed: ${loginRes.status} ${loginRes.statusText}`);
+        // Also try looking for a meta refresh or JS redirect with token
+        const metaMatch = body.match(/url=([^"]*Transfer\?Token=[^"]*)/i);
+        const jsMatch = body.match(/window\.location\s*=\s*['"]([^'"]*Transfer\?Token=[^'"]*)['"]/i);
+        const actionMatch = body.match(/action="([^"]*Transfer[^"]*)"/i);
+
+        if (metaMatch) {
+          transferUrl = metaMatch[1];
+        } else if (jsMatch) {
+          transferUrl = jsMatch[1];
+        } else if (actionMatch) {
+          transferUrl = actionMatch[1];
+        }
+
+        if (transferUrl && !transferUrl.startsWith('http')) {
+          transferUrl = `https://uwrg.psarcweb.com${transferUrl}`;
+        }
+
+        if (!transferUrl) {
+          if (loginRes.ok) {
+            // Login may have succeeded directly
+            console.log(`[PSA:${this.config.id}] Login succeeded directly (no transfer needed)`);
+            this.sessionExpires = Date.now() + this.SESSION_TTL;
+            return;
+          }
+          // Check for error messages in the body
+          const errorMatch = body.match(/class="validation-summary[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+          const errorText = errorMatch ? errorMatch[1].replace(/<[^>]+>/g, '').trim() : '';
+          throw new Error(`PSA login failed: ${loginRes.status} ${loginRes.statusText}. ${errorText ? 'Error: ' + errorText : 'No transfer URL found. Check credentials/schema.'}`);
+        }
       }
     }
 
@@ -231,6 +381,40 @@ class PSASession {
       }
 
       const body = await this.psaPost('/Job/Job/ListFilter', formData);
+
+      // Check if we got HTML instead of JSON (login failure / session issue)
+      if (body.trimStart().startsWith('<!DOCTYPE') || body.trimStart().startsWith('<html')) {
+        console.error(`[PSA:${this.config.id}] ListFilter returned HTML instead of JSON. First 200 chars: ${body.substring(0, 200)}`);
+        // Force re-login and retry once
+        this.sessionCookies = [];
+        this.sessionExpires = 0;
+        await this.login();
+        const retryBody = await this.psaPost('/Job/Job/ListFilter', formData);
+        if (retryBody.trimStart().startsWith('<!DOCTYPE') || retryBody.trimStart().startsWith('<html')) {
+          throw new Error(`PSA ListFilter returns HTML after re-login. Login may have failed for schema ${this.config.schema}. First 300 chars: ${retryBody.substring(0, 300)}`);
+        }
+        const retryData = JSON.parse(retryBody);
+        total = retryData.iTotalDisplayRecords;
+        for (const row of retryData.aaData) {
+          const job: PSARawJob = {
+            job_number: row[0], client_name: row[1], contact_name: row[2],
+            insurance_info: (row[3] || '').replace(/&nbsp;/g, '').trim(),
+            address: row[4], state: row[5], city: row[6],
+            assigned_to: row[7], date: row[8], status: row[9], job_id: row[10],
+            territory: '', year: '', seq: '', job_type_code: '',
+          };
+          const parts = job.job_number.split('-');
+          if (parts.length >= 4) {
+            job.territory = parts[0]; job.year = parts[1];
+            job.seq = parts[2]; job.job_type_code = parts[3].split(';')[0];
+          }
+          allJobs.push(job);
+        }
+        offset += pageSize;
+        console.log(`[PSA:${this.config.id}] Fetched ${allJobs.length}/${total} jobs (after retry)...`);
+        continue;
+      }
+
       const data = JSON.parse(body);
       total = data.iTotalDisplayRecords;
 
@@ -339,10 +523,11 @@ class PSASession {
     }
     console.log(`[PSA:${this.config.id}] Entity selects for job: ${JSON.stringify(entityFields)}`);
 
-    // Map known PSA fields to people roles
-    // These field names may vary by PSA configuration - log above helps discover correct ones
-    detail.projectManager = entityFields['Entity_ProjectManagerID'] || entityFields['Entity_PMID'] || '';
-    detail.estimator = entityFields['Entity_EstimatorID'] || entityFields['Entity_SalesPersonID'] || '';
+    // Note: PSA does NOT have PM/Estimator/BD person fields as selects.
+    // Entity_ selects only contain: JobTypeID, LocationID, BuildingTypeID, TeamID, ReferrerID.
+    // People roles are resolved via team registry + notes employee analysis in enrichJob().
+    detail.projectManager = '';
+    detail.estimator = '';
 
     // Lifecycle dates
     const dateDescs = html.matchAll(/JobDates\[(\d+)\]\.DateTypeDescription"[^>]*value="([^"]*)"/g);
@@ -623,7 +808,11 @@ class PSASession {
       status = 'Received';
     }
 
-    console.log(`[PSA:${this.config.id}] Job ${raw.job_number}: dates=[${Object.keys(dates).join(',')}] alt="${detail?.alt_status || ''}" → status="${status}" tech="${raw.assigned_to}" pm="${detail?.projectManager}" est="${detail?.estimator}" team="${detail?.team}" ref="${detail?.referrer}"`);
+    // ─── Resolve People Roles via Team Registry ─────────────────────────────
+    const noteEmployees = psaNotes.map(n => n.employee).filter(Boolean);
+    const roles = resolveRoles(this.config.id, raw.assigned_to || '', noteEmployees);
+
+    console.log(`[PSA:${this.config.id}] Job ${raw.job_number}: dates=[${Object.keys(dates).join(',')}] alt="${detail?.alt_status || ''}" → status="${status}" | roles: tech="${roles.tech}" pm="${roles.pm}" bd="${roles.bd}" est="${roles.estimator}" | assigned_to="${raw.assigned_to}" noteEmployees=[${[...new Set(noteEmployees)].join(', ')}]`);
 
     // Last activity from notes
     let lastActivityDate = openedDate;
@@ -725,10 +914,10 @@ class PSASession {
       hasSourceSolution,
       photoCount: 0,
       priorityOverride: 0,
-      assignedTech: raw.assigned_to || '',
-      projectManager: detail?.projectManager || '',
-      estimator: detail?.estimator || '',
-      businessDev: detail?.referrer || '',
+      assignedTech: roles.tech,
+      projectManager: roles.pm,
+      estimator: roles.estimator,
+      businessDev: roles.bd,
     };
   }
 

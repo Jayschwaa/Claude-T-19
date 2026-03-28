@@ -206,7 +206,7 @@ export default function JobCard({ scoredJob }: { scoredJob: ScoredJob }) {
                 {job.businessDev && (
                   <div className="flex items-center gap-2">
                     <User className="w-3 h-3 text-slate-500" />
-                    <span className="text-slate-400">Source:</span>
+                    <span className="text-slate-400">BD:</span>
                     <span className="text-white">{job.businessDev}</span>
                   </div>
                 )}
