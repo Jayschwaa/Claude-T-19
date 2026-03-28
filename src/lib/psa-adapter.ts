@@ -425,14 +425,14 @@ class PSASession {
 
   // ─── Data Fetching Methods (use session's HTTP methods) ──────────────────
 
-  async fetchAllOpenJobs(pageSize = 100): Promise<PSARawJob[]> {
+  async fetchJobsByOption(option: string, pageSize = 100): Promise<PSARawJob[]> {
     const allJobs: PSARawJob[] = [];
     let offset = 0;
     let total: number | null = null;
 
     while (total === null || offset < total) {
       const formData: Record<string, string | number> = {
-        option: 'Open',
+        option,
         iDisplayStart: offset,
         iDisplayLength: pageSize,
         sEcho: 1,
@@ -488,7 +488,7 @@ class PSASession {
       }
 
       offset += pageSize;
-      console.log(`[PSA:${this.config.id}] Fetched ${allJobs.length}/${total} jobs...`);
+      console.log(`[PSA:${this.config.id}] Fetched ${allJobs.length}/${total} ${option} jobs...`);
     }
 
     return allJobs;
@@ -983,8 +983,24 @@ class PSASession {
 
   async fetchJobs(): Promise<Job[]> {
     console.log(`[PSA:${this.config.id}] Fetching all open jobs...`);
-    const allJobs = await this.fetchAllOpenJobs(100);
-    console.log(`[PSA:${this.config.id}] Total open jobs: ${allJobs.length}`);
+    const openJobs = await this.fetchJobsByOption('Open', 100);
+    console.log(`[PSA:${this.config.id}] Total open jobs: ${openJobs.length}`);
+
+    // Also fetch closed jobs to capture "complete not invoiced" ones
+    console.log(`[PSA:${this.config.id}] Fetching closed jobs...`);
+    const closedJobs = await this.fetchJobsByOption('Closed', 100);
+    console.log(`[PSA:${this.config.id}] Total closed jobs: ${closedJobs.length}`);
+
+    // Combine: all open jobs + closed jobs (de-duped by job_id)
+    const seenIds = new Set(openJobs.map(j => j.job_id));
+    const allJobs = [...openJobs];
+    for (const j of closedJobs) {
+      if (!seenIds.has(j.job_id)) {
+        allJobs.push(j);
+        seenIds.add(j.job_id);
+      }
+    }
+    console.log(`[PSA:${this.config.id}] Combined total: ${allJobs.length}`);
 
     // Log sample job numbers for debugging format differences across locations
     if (allJobs.length > 0) {
