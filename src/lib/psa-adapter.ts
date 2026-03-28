@@ -840,16 +840,22 @@ class PSASession {
     // Status derivation
     let status: WorkflowStatus;
     const altStatus = (detail?.alt_status || '').toLowerCase();
-    const altStatusIndicatesCompleted = altStatus.includes('paid') || altStatus.includes('collections') ||
+
+    // Only match FULL job completion, not sub-phases like "Mitigation Complete" or "Estimate Complete"
+    const subPhaseWords = ['mitig', 'estimate', 'pack', 'demo', 'drying', 'phase', 'clear'];
+    const isSubPhaseComplete = altStatus.includes('complete') && subPhaseWords.some(w => altStatus.includes(w));
+    const altStatusIsJobComplete = (
+      altStatus.includes('paid') || altStatus.includes('collections') ||
       altStatus.includes('closed') || altStatus.includes('write off') || altStatus.includes('invoiced') ||
-      altStatus.includes('complete');
+      (altStatus.includes('complete') && !isSubPhaseComplete)
+    );
     const altStatusIndicatesSales = altStatus.includes('submitted') || altStatus.includes('review') ||
       altStatus.includes('negotiat') || altStatus.includes('in process');
     const altStatusIndicatesWIP = altStatus.includes('appointment') || altStatus.includes('hold');
 
-    // Alt status "Complete/Paid/Closed/etc." overrides date-based logic
-    // because many completed jobs still have productionStartDate but no completedDate
-    if (completedDate || altStatusIndicatesCompleted) {
+    // Alt status indicating full job completion overrides date-based logic
+    // because many completed jobs have productionStartDate but no completedDate in dates
+    if (completedDate || altStatusIsJobComplete) {
       status = 'Completed';
     } else if (productionStartDate || altStatusIndicatesWIP) {
       status = 'WIP';
