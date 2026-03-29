@@ -1036,7 +1036,7 @@ class PSASession {
     // Also fetch recent closed jobs — PSA moves completed jobs to "Closed" even if not invoiced
     // We include them and let the post-enrich filter remove completed+invoiced ones
     console.log(`[PSA:${this.config.id}] Fetching recent closed jobs...`);
-    const closedJobs = await this.fetchRecentClosedJobs(300);
+    const closedJobs = await this.fetchRecentClosedJobs(1000);
     console.log(`[PSA:${this.config.id}] Recent closed jobs (filtered): ${closedJobs.length}`);
 
     const seenIds = new Set(openJobs.map(j => j.job_id));
