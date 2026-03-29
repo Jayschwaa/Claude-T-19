@@ -1040,11 +1040,13 @@ class PSASession {
     console.log(`[PSA:${this.config.id}] Recent closed jobs (filtered): ${closedJobs.length}`);
 
     const seenIds = new Set(openJobs.map(j => j.job_id));
+    const closedJobIds = new Set<number>(); // Track which jobs came from the closed list
     const allJobs = [...openJobs];
     for (const j of closedJobs) {
       if (!seenIds.has(j.job_id)) {
         allJobs.push(j);
         seenIds.add(j.job_id);
+        closedJobIds.add(j.job_id);
       }
     }
     console.log(`[PSA:${this.config.id}] Combined: ${allJobs.length} (${openJobs.length} open + ${allJobs.length - openJobs.length} closed)`);
@@ -1100,16 +1102,23 @@ class PSASession {
       console.log(`[PSA:${this.config.id}] Enriched ${Math.min(i + batchSize, filtered.length)}/${filtered.length}`);
     }
 
-    // Post-enrich filter: exclude completed+invoiced jobs
+    // Post-enrich filter:
+    // 1. Exclude completed+invoiced jobs (fully done, no action needed)
+    // 2. Exclude closed-sourced jobs that aren't actually completed (abandoned/canceled)
     const active = enriched.filter(j => {
       if (j.completedDate && j.invoicedDate) {
         console.log(`[PSA:${this.config.id}] Excluding completed+invoiced: ${j.jobNumber} (${j.customerName})`);
         return false;
       }
+      const isFromClosedList = closedJobIds.has(Number(j.id));
+      if (isFromClosedList && !j.completedDate) {
+        console.log(`[PSA:${this.config.id}] Excluding closed-but-not-completed (abandoned): ${j.jobNumber} (${j.customerName})`);
+        return false;
+      }
       return true;
     });
 
-    console.log(`[PSA:${this.config.id}] After filter: ${active.length} active jobs (excluded ${enriched.length - active.length} completed+invoiced)`);
+    console.log(`[PSA:${this.config.id}] After filter: ${active.length} active jobs (excluded ${enriched.length - active.length} completed+invoiced/abandoned)`);
     return active;
   }
 }
