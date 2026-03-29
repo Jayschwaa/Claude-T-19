@@ -156,6 +156,11 @@ export interface DashboardSummary {
   ticketCompletenessRate: number;
   allTechs: string[];
   allBDs: string[];
+  // STR Summary
+  strSignedRevenue: number;       // STR jobs that are approved/WIP/completed
+  strUnsignedRevenue: number;     // STR jobs in received/scoped/sales
+  strPotentialQuoteCount: number; // MIT jobs without a linked STR estimate
+  strTotalJobs: number;           // total STR jobs
 }
 
 // Data adapter
@@ -168,6 +173,7 @@ export interface DataAdapter {
 export interface LocationData {
   id: string;
   name: string;
-  scoredJobs: ScoredJob[];
+  scoredJobs: ScoredJob[];  // MIT jobs (excludes STR)
+  strJobs: ScoredJob[];     // STR jobs (separate division)
   summary: DashboardSummary;
 }

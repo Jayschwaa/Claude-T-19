@@ -6,7 +6,7 @@ import SummaryBar from './SummaryBar';
 import JobList from './JobList';
 
 // The "view mode" set by clicking a top-panel box
-export type ViewMode = 'priority' | 'revenue' | 'ticket-expansion' | 'upsell' | 'iicrc-gaps' | 'ticket-gaps';
+export type ViewMode = 'priority' | 'revenue' | 'ticket-expansion' | 'upsell' | 'iicrc-gaps' | 'ticket-gaps' | 'str-summary';
 
 interface Props {
   locationDataList: LocationData[];
@@ -69,6 +69,7 @@ export default function DashboardClient({ locationDataList, showTabs }: Props) {
       />
       <JobList
         scoredJobs={activeLocation.scoredJobs}
+        strJobs={activeLocation.strJobs}
         summary={activeLocation.summary}
         viewMode={viewMode}
         statusFromBar={statusFromBar}

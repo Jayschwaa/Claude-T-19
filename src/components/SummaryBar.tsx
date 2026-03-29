@@ -60,13 +60,13 @@ export default function SummaryBar({ summary, activeView, activeStatus, onBoxCli
           <p className="text-[10px] text-slate-500">across all open jobs</p>
           {activeView === 'iicrc-gaps' && <p className="text-[10px] text-red-400 mt-1">Worst compliance first</p>}
         </div>
-        <div className={boxClass('ticket-gaps', '')} onClick={() => onBoxClick('ticket-gaps')}>
-          <p className="text-xs text-slate-400">Ticket Complete</p>
-          <p className="text-xl font-bold" style={{ color: summary.ticketCompletenessRate >= 70 ? '#4ade80' : summary.ticketCompletenessRate >= 40 ? '#facc15' : '#f87171' }}>
-            {summary.ticketCompletenessRate}%
+        <div className={boxClass('str-summary', 'border-purple-700/50')} onClick={() => onBoxClick('str-summary')}>
+          <p className="text-xs text-slate-400">STR Summary</p>
+          <p className="text-lg font-bold text-purple-400">{fmt(summary.strSignedRevenue)}</p>
+          <p className="text-[10px] text-slate-500">
+            {fmt(summary.strUnsignedRevenue)} unsigned · {summary.strPotentialQuoteCount} to quote
           </p>
-          <p className="text-[10px] text-slate-500">fields filled in</p>
-          {activeView === 'ticket-gaps' && <p className="text-[10px] text-red-400 mt-1">Most gaps first</p>}
+          {activeView === 'str-summary' && <p className="text-[10px] text-purple-400 mt-1">{summary.strTotalJobs} STR jobs</p>}
         </div>
       </div>
 

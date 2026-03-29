@@ -7,12 +7,13 @@ import JobCard from './JobCard';
 
 interface JobListProps {
   scoredJobs: ScoredJob[];
+  strJobs: ScoredJob[];
   summary: DashboardSummary;
   viewMode: ViewMode;
   statusFromBar: string | null;
 }
 
-export default function JobList({ scoredJobs, summary, viewMode, statusFromBar }: JobListProps) {
+export default function JobList({ scoredJobs, strJobs, summary, viewMode, statusFromBar }: JobListProps) {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
@@ -20,7 +21,7 @@ export default function JobList({ scoredJobs, summary, viewMode, statusFromBar }
   const [personFilter, setPersonFilter] = useState<string>('all');
 
   const statuses: WorkflowStatus[] = ['Received', 'Scoped', 'Sales', 'WIP', 'Completed'];
-  const types: JobType[] = ['WTR', 'MLD', 'STR', 'FIR'];
+  const types: JobType[] = ['WTR', 'MLD', 'FIR', 'RECON', 'OTHER'];
 
   // Build person list
   const personOptions: { label: string; value: string }[] = [];
@@ -32,6 +33,21 @@ export default function JobList({ scoredJobs, summary, viewMode, statusFromBar }
   }
 
   const filtered = useMemo(() => {
+    // STR summary view shows STR jobs instead of MIT jobs
+    if (viewMode === 'str-summary') {
+      let result = [...strJobs];
+      if (search) {
+        const q = search.toLowerCase();
+        result = result.filter(s =>
+          s.job.jobNumber.toLowerCase().includes(q) ||
+          s.job.customerName.toLowerCase().includes(q) ||
+          s.job.address.toLowerCase().includes(q)
+        );
+      }
+      result.sort((a, b) => (b.job.estimateAmount + b.job.supplementAmount) - (a.job.estimateAmount + a.job.supplementAmount));
+      return result;
+    }
+
     let result = [...scoredJobs];
 
     // --- Filtering ---
@@ -87,9 +103,14 @@ export default function JobList({ scoredJobs, summary, viewMode, statusFromBar }
         break;
 
       case 'ticket-expansion':
-        // Only jobs with supplements, sorted by supplement amount desc
-        result = result.filter(s => s.job.supplementAmount > 0);
-        result.sort((a, b) => b.job.supplementAmount - a.job.supplementAmount);
+        // Jobs with flagged ticket expansion opportunities, sorted by total expansion potential
+        result = result.filter(s => s.ticketExpansionItems.some(i => i.flagged));
+        result.sort((a, b) => {
+          const aCount = a.ticketExpansionItems.filter(i => i.flagged).length;
+          const bCount = b.ticketExpansionItems.filter(i => i.flagged).length;
+          if (bCount !== aCount) return bCount - aCount;
+          return (b.job.estimateAmount + b.job.supplementAmount) - (a.job.estimateAmount + a.job.supplementAmount);
+        });
         break;
 
       case 'upsell':
@@ -132,7 +153,7 @@ export default function JobList({ scoredJobs, summary, viewMode, statusFromBar }
     }
 
     return result;
-  }, [scoredJobs, search, statusFilter, typeFilter, flagFilter, personFilter, viewMode, statusFromBar]);
+  }, [scoredJobs, strJobs, search, statusFilter, typeFilter, flagFilter, personFilter, viewMode, statusFromBar]);
 
   // Calculate filtered totals
   const filteredRevenue = filtered.reduce((s, sj) => s + sj.job.estimateAmount, 0);
@@ -141,10 +162,11 @@ export default function JobList({ scoredJobs, summary, viewMode, statusFromBar }
   const viewModeLabels: Record<ViewMode, string> = {
     priority: 'sorted by priority',
     revenue: 'sorted by revenue',
-    'ticket-expansion': 'with supplements',
+    'ticket-expansion': 'with expansion opportunities',
     upsell: 'with upsell opportunities',
     'iicrc-gaps': 'with IICRC gaps (worst first)',
     'ticket-gaps': 'with ticket gaps (worst first)',
+    'str-summary': 'STR jobs by revenue',
   };
 
   return (

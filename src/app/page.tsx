@@ -6,7 +6,7 @@ import { LocationData, DashboardSummary } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
-function buildSummary(scored: ReturnType<typeof scoreAllJobs>): DashboardSummary {
+function buildSummary(scored: ReturnType<typeof scoreAllJobs>, allScored: ReturnType<typeof scoreAllJobs>): DashboardSummary {
   const summary: DashboardSummary = {
     totalJobs: 0,
     estimatedRevenue: 0,
@@ -22,6 +22,10 @@ function buildSummary(scored: ReturnType<typeof scoreAllJobs>): DashboardSummary
     ticketCompletenessRate: 0,
     allTechs: [],
     allBDs: [],
+    strSignedRevenue: 0,
+    strUnsignedRevenue: 0,
+    strPotentialQuoteCount: 0,
+    strTotalJobs: 0,
   };
 
   summary.totalJobs = scored.length;
@@ -82,6 +86,23 @@ function buildSummary(scored: ReturnType<typeof scoreAllJobs>): DashboardSummary
   summary.allTechs = Array.from(techSet).sort();
   summary.allBDs = Array.from(bdSet).sort();
 
+  // STR Summary — computed from ALL jobs (including STR)
+  for (const sj of allScored) {
+    const j = sj.job;
+    if (j.type === 'STR') {
+      summary.strTotalJobs++;
+      const signed = ['Sales', 'WIP', 'Completed'].includes(j.status) && j.approvedDate;
+      if (signed) {
+        summary.strSignedRevenue += j.estimateAmount;
+      } else {
+        summary.strUnsignedRevenue += j.estimateAmount;
+      }
+    } else if ((j.type === 'WTR' || j.type === 'MLD') && !j.hasReconEstimate) {
+      // MIT jobs without a linked STR — potential to quote
+      summary.strPotentialQuoteCount++;
+    }
+  }
+
   return summary;
 }
 
@@ -94,9 +115,14 @@ export default async function Dashboard() {
     configs.map(async (config) => {
       const adapter = createAdapterForLocation(config);
       const jobs = await adapter.getJobs();
-      const scored = scoreAllJobs(jobs);
-      const summary = buildSummary(scored);
-      return { id: config.id, name: config.name, scoredJobs: scored, summary };
+      const allScored = scoreAllJobs(jobs);
+      // Separate STR jobs from main dashboard — STR is a separate division
+      const mitScored = allScored.filter(sj => sj.job.type !== 'STR');
+      const strScored = allScored.filter(sj => sj.job.type === 'STR');
+      // Re-rank MIT jobs only
+      mitScored.forEach((s, idx) => { s.rank = idx + 1; });
+      const summary = buildSummary(mitScored, allScored);
+      return { id: config.id, name: config.name, scoredJobs: mitScored, strJobs: strScored, summary };
     })
   );
 

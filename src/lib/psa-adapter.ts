@@ -1147,7 +1147,8 @@ function mapJobTypeCode(code: string): JobType {
   if (c === 'BIO') return 'BIO';
   if (c === 'CON' || c === 'CNTNT' || c.includes('CONTENT')) return 'CNTNT';
   if (c === 'DUCT' || c.includes('HVAC')) return 'DUCT';
-  if (c === 'RCN' || c === 'RECON' || c.includes('REBUILD') || c === 'STR' || c.includes('STORM')) return 'RECON';
+  if (c === 'STR') return 'STR';
+  if (c === 'RCN' || c === 'RECON' || c.includes('REBUILD') || c.includes('STORM')) return 'RECON';
   if (c === 'FRM' || c === 'CPT' || c === 'STC') return 'WTR';
   return 'WTR';
 }
