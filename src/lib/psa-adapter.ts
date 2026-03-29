@@ -1102,23 +1102,34 @@ class PSASession {
       console.log(`[PSA:${this.config.id}] Enriched ${Math.min(i + batchSize, filtered.length)}/${filtered.length}`);
     }
 
-    // Post-enrich filter:
-    // 1. Exclude completed+invoiced jobs (fully done, no action needed)
-    // 2. Exclude closed-sourced jobs that aren't actually completed (abandoned/canceled)
+    // Post-enrich: handle closed-sourced jobs
+    // PSA moves completed jobs to "Closed" list — treat all closed-sourced jobs as Completed
+    // (they may not have completedDate detected if enrichment detail page was flaky)
+    for (const j of enriched) {
+      const isFromClosedList = closedJobIds.has(Number(j.id));
+      if (isFromClosedList) {
+        // Force status to Completed — PSA already classified these as closed
+        if (j.status !== 'Completed') {
+          console.log(`[PSA:${this.config.id}] Closed-sourced job ${j.jobNumber} status ${j.status} → Completed`);
+          (j as any).status = 'Completed';
+        }
+        // Set completedDate if not detected (use lastActivityDate as fallback)
+        if (!j.completedDate) {
+          (j as any).completedDate = j.lastActivityDate;
+        }
+      }
+    }
+
+    // Filter: only exclude completed+invoiced jobs (fully done, no action needed)
     const active = enriched.filter(j => {
       if (j.completedDate && j.invoicedDate) {
         console.log(`[PSA:${this.config.id}] Excluding completed+invoiced: ${j.jobNumber} (${j.customerName})`);
         return false;
       }
-      const isFromClosedList = closedJobIds.has(Number(j.id));
-      if (isFromClosedList && !j.completedDate) {
-        console.log(`[PSA:${this.config.id}] Excluding closed-but-not-completed (abandoned): ${j.jobNumber} (${j.customerName})`);
-        return false;
-      }
       return true;
     });
 
-    console.log(`[PSA:${this.config.id}] After filter: ${active.length} active jobs (excluded ${enriched.length - active.length} completed+invoiced/abandoned)`);
+    console.log(`[PSA:${this.config.id}] After filter: ${active.length} active jobs (excluded ${enriched.length - active.length} completed+invoiced)`);
     return active;
   }
 }
