@@ -110,7 +110,9 @@ export default async function Dashboard() {
   const configs = getLocationConfigs();
   const locationDataList: LocationData[] = [];
 
-  // Fetch data for all configured locations in parallel, with 90s timeout per location
+  // Fetch data for all configured locations in parallel, with 180s timeout per location
+  // First load takes 2-4 minutes (enriching 50-60 jobs × 3 HTTP calls each)
+  // Subsequent loads are instant due to module-level adapter caching
   const withTimeout = <T,>(promise: Promise<T>, ms: number, label: string): Promise<T> =>
     Promise.race([
       promise,
@@ -132,7 +134,7 @@ export default async function Dashboard() {
           const summary = buildSummary(mitScored, allScored);
           return { id: config.id, name: config.name, scoredJobs: mitScored, strJobs: strScored, summary };
         })(),
-        90000,
+        180000,
         config.name,
       );
     })

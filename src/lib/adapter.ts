@@ -96,10 +96,20 @@ export function createAdapter(): DataAdapter {
 
 /**
  * Create an adapter for a specific PSA location configuration.
+ * Uses module-level singleton cache so the same adapter is reused across page loads.
  */
+const locationAdapters = new Map<string, SafePSAAdapterForLocation>();
+
 export function createAdapterForLocation(config: PSALocationConfig): DataAdapter {
-  console.log(`[Adapter] Creating PSA adapter for location: ${config.name}`);
-  return new SafePSAAdapterForLocation(config);
+  const existing = locationAdapters.get(config.id);
+  if (existing) {
+    console.log(`[Adapter] Reusing cached PSA adapter for location: ${config.name}`);
+    return existing;
+  }
+  console.log(`[Adapter] Creating new PSA adapter for location: ${config.name}`);
+  const adapter = new SafePSAAdapterForLocation(config);
+  locationAdapters.set(config.id, adapter);
+  return adapter;
 }
 
 /**
