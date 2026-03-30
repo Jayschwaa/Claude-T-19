@@ -1,16 +1,17 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getLocationConfigs } from '@/lib/psa-config';
 import { createAdapterForLocation } from '@/lib/adapter';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const locationId = request.nextUrl.searchParams.get('location') || 't19';
     const configs = getLocationConfigs();
-    const t19Config = configs.find(c => c.id === 't19');
-    if (!t19Config) return NextResponse.json({ error: 'No T-19 config' });
+    const config = configs.find(c => c.id === locationId);
+    if (!config) return NextResponse.json({ error: `No config for '${locationId}'. Available: ${configs.map(c => c.id).join(', ')}` });
 
-    const adapter = createAdapterForLocation(t19Config);
+    const adapter = createAdapterForLocation(config);
     const jobs = await adapter.getJobs();
 
     const statusBreakdown: Record<string, number> = {};
@@ -37,6 +38,8 @@ export async function GET() {
     });
 
     return NextResponse.json({
+      location: config.name,
+      locationId: config.id,
       totalJobs: jobs.length,
       statusBreakdown,
       jobs: jobSummaries,
