@@ -391,6 +391,8 @@ class PSASession {
         assigned_to: row[6] || '',
         date: row[0] || '',
         status: row[8] || '',
+        list_alt_status: (row[5] || '').replace(/&nbsp;/g, '').replace(/%/g, '').trim(),
+        list_amount: parseFloat((row[7] || '0').replace(/[^0-9.-]/g, '')) || 0,
         job_id: parseInt(row[10]) || 0,
         territory: '', year: '', seq: '', job_type_code: '',
       };
@@ -407,6 +409,8 @@ class PSASession {
         assigned_to: row[7] || '',
         date: row[8] || '',
         status: row[9] || '',
+        list_alt_status: '',  // T-19 layout doesn't have alt_status in list
+        list_amount: 0,
         job_id: parseInt(row[10]) || 0,
         territory: '', year: '', seq: '', job_type_code: '',
       };
@@ -477,7 +481,7 @@ class PSASession {
       // Log first row to understand column mapping per location
       if (offset === 0 && data.aaData && data.aaData.length > 0) {
         const firstRow = data.aaData[0];
-        console.log(`[PSA:${this.config.id}] First row columns (${firstRow.length} cols): ${JSON.stringify(firstRow.slice(0, 12))}`);
+        console.log(`[PSA:${this.config.id}] First row ALL columns (${firstRow.length} cols): ${JSON.stringify(firstRow)}`);
       }
 
       for (const row of data.aaData) {
@@ -818,6 +822,7 @@ class PSASession {
       financial?.revenue_actual || 0,
       detail?.revenuedisplay || 0,
       detail?.completeddisplay || 0,
+      raw.list_amount || 0,  // Revenue from PSA list column
     );
     const supplementAmount = 0;
     if (estimateAmount > 0) {
@@ -882,11 +887,15 @@ class PSASession {
 
     if (!openedDate) openedDate = new Date().toISOString().split('T')[0];
 
-    // Status derivation — use PSA's STAGE field from the job list as primary source,
+    // Status derivation — use PSA's STAGE/alt_status field as primary source,
     // with date-based logic as fallback
     let status: WorkflowStatus;
-    const psaStage = (raw.status || '').toLowerCase().trim();
-    const altStatus = (detail?.alt_status || '').toLowerCase();
+    const psaListStatus = (raw.status || '').toLowerCase().trim();  // OPEN/CLOSED
+    const listAltStatus = (raw.list_alt_status || '').toLowerCase().trim(); // Stage from list (Omaha col5)
+    const detailAltStatus = (detail?.alt_status || '').toLowerCase();
+    // Use the best available stage: list alt_status > detail alt_status > list status
+    const altStatus = listAltStatus || detailAltStatus;
+    const psaStage = listAltStatus || psaListStatus;
 
     // Map PSA stage values to our workflow statuses
     const stageStatus = mapStatus(psaStage);
@@ -915,7 +924,7 @@ class PSASession {
       status = 'Received';
     }
 
-    console.log(`[PSA:${this.config.id}] Status for ${raw.job_number}: stage="${psaStage}" → ${stageStatus}, final=${status}`);
+    console.log(`[PSA:${this.config.id}] Status for ${raw.job_number}: listStatus="${psaListStatus}" listAlt="${listAltStatus}" detailAlt="${detailAltStatus}" stage="${psaStage}" → ${stageStatus}, final=${status}`);
 
     // ─── Resolve People Roles via Team Registry ─────────────────────────────
     const noteEmployees = psaNotes.map(n => n.employee).filter(Boolean);
@@ -1028,7 +1037,7 @@ class PSASession {
       opsManager: roles.opsManager,
       estimator: roles.estimator,
       businessDev: roles.bd,
-      psaAltStatus: `stage:${raw.status || ''}|alt:${detail?.alt_status || ''}|dates:${Object.keys(detail?.dates || {}).length}`,
+      psaAltStatus: `list:${raw.status || ''}|listAlt:${raw.list_alt_status || ''}|amt:${raw.list_amount || 0}|detailAlt:${detail?.alt_status || ''}|dates:${Object.keys(detail?.dates || {}).length}`,
       psaDateDescriptions: Object.keys(detail?.dates || {}),
     };
   }
@@ -1248,7 +1257,9 @@ interface PSARawJob {
   city: string;
   assigned_to: string;
   date: string;
-  status: string;
+  status: string;       // PSA list status (OPEN/CLOSED)
+  list_alt_status: string; // PSA list alt_status/stage column (Omaha col5)
+  list_amount: number;     // PSA list amount column (Omaha col7)
   job_id: number;
   territory: string;
   year: string;
