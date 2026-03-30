@@ -529,7 +529,7 @@ class PSASession {
       this.parseJobNumber(job);
       // Pre-filter: only keep jobs matching territory and year
       if (this.config.territoryFilter && job.territory !== this.config.territoryFilter) continue;
-      if (this.config.yearFilter && job.year !== this.config.yearFilter) continue;
+      if (this.config.yearFilter.length > 0 && !this.config.yearFilter.includes(job.year)) continue;
       if (EXCLUDED_PSA_TYPES.has(job.job_type_code.toUpperCase())) continue;
       jobs.push(job);
     }
@@ -1065,15 +1065,13 @@ class PSASession {
     // Year filter: if yearFilter is set, apply it; if all jobs get filtered out,
     // fall back to showing all jobs (handles different job number formats)
     const yearFiltered = filtered.filter(j => {
-      if (j.year !== this.config.yearFilter) return false;
+      if (this.config.yearFilter.length > 0 && !this.config.yearFilter.includes(j.year)) return false;
       if (EXCLUDED_PSA_TYPES.has(j.job_type_code.toUpperCase())) return false;
       return true;
     });
 
     if (yearFiltered.length === 0 && filtered.length > 0) {
-      // Year filter removed all jobs — likely different job number format
-      // Fall back to type filter only
-      console.warn(`[PSA:${this.config.id}] Year filter '${this.config.yearFilter}' removed all ${filtered.length} jobs. Falling back to no year filter.`);
+      console.warn(`[PSA:${this.config.id}] Year filter '${this.config.yearFilter.join(',')}' removed all ${filtered.length} jobs. Falling back to no year filter.`);
       filtered = filtered.filter(j => !EXCLUDED_PSA_TYPES.has(j.job_type_code.toUpperCase()));
     } else {
       filtered = yearFiltered;
@@ -1333,7 +1331,7 @@ export function createPSAAdapter(): DataAdapter {
     baseUrl: process.env.PSA_BASE_URL || 'https://uwrg.psarcweb.com/PSAWeb',
     schema: process.env.PSA_SCHEMA || '1022',
     territoryFilter: '19',
-    yearFilter: '26',
+    yearFilter: ['26'],
   });
 }
 
@@ -1358,7 +1356,7 @@ export async function testPSAConnection(): Promise<{
       baseUrl: process.env.PSA_BASE_URL || 'https://uwrg.psarcweb.com/PSAWeb',
       schema: process.env.PSA_SCHEMA || '1022',
       territoryFilter: '19',
-      yearFilter: '26',
+      yearFilter: ['26'],
     };
 
     const session = new PSASession(config);
@@ -1405,7 +1403,7 @@ export async function debugJobDetail(jobId: number): Promise<Record<string, unkn
       baseUrl: process.env.PSA_BASE_URL || 'https://uwrg.psarcweb.com/PSAWeb',
       schema: process.env.PSA_SCHEMA || '1022',
       territoryFilter: '19',
-      yearFilter: '26',
+      yearFilter: ['26'],
     };
 
     const session = new PSASession(config);
@@ -1473,7 +1471,7 @@ export async function debugT19Status(): Promise<Record<string, unknown>> {
       baseUrl: process.env.PSA_BASE_URL || 'https://uwrg.psarcweb.com/PSAWeb',
       schema: process.env.PSA_SCHEMA || '1022',
       territoryFilter: '19',
-      yearFilter: '26',
+      yearFilter: ['26'],
     };
 
     const session = new PSASession(config);

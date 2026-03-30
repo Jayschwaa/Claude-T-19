@@ -11,7 +11,7 @@ export interface PSALocationConfig {
   baseUrl: string;
   schema: string;
   territoryFilter: string | null; // null = all territories for that login
-  yearFilter: string;
+  yearFilter: string[];  // e.g. ['26'] or ['25', '26']
 }
 
 /**
@@ -32,7 +32,7 @@ export function getLocationConfigs(): PSALocationConfig[] {
       baseUrl: process.env.PSA_BASE_URL || 'https://uwrg.psarcweb.com/PSAWeb',
       schema: process.env.PSA_SCHEMA || '1022',
       territoryFilter: '19',
-      yearFilter: '26',
+      yearFilter: ['26'],
     });
   }
 
@@ -49,7 +49,7 @@ export function getLocationConfigs(): PSALocationConfig[] {
         'https://uwrg.psarcweb.com/PSAWeb',
       schema: process.env.PSA_OMAHA_SCHEMA || '1520',
       territoryFilter: null, // fetch all territories, narrow later
-      yearFilter: '26',
+      yearFilter: ['25', '26'],  // Include year 25 jobs still in progress
     });
   }
 
