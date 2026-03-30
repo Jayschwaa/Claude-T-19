@@ -110,19 +110,31 @@ export default async function Dashboard() {
   const configs = getLocationConfigs();
   const locationDataList: LocationData[] = [];
 
-  // Fetch data for all configured locations in parallel
+  // Fetch data for all configured locations in parallel, with 90s timeout per location
+  const withTimeout = <T,>(promise: Promise<T>, ms: number, label: string): Promise<T> =>
+    Promise.race([
+      promise,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms)),
+    ]);
+
   const results = await Promise.allSettled(
     configs.map(async (config) => {
-      const adapter = createAdapterForLocation(config);
-      const jobs = await adapter.getJobs();
-      const allScored = scoreAllJobs(jobs);
-      // Separate STR jobs from main dashboard — STR is a separate division
-      const mitScored = allScored.filter(sj => sj.job.type !== 'STR');
-      const strScored = allScored.filter(sj => sj.job.type === 'STR');
-      // Re-rank MIT jobs only
-      mitScored.forEach((s, idx) => { s.rank = idx + 1; });
-      const summary = buildSummary(mitScored, allScored);
-      return { id: config.id, name: config.name, scoredJobs: mitScored, strJobs: strScored, summary };
+      return withTimeout(
+        (async () => {
+          const adapter = createAdapterForLocation(config);
+          const jobs = await adapter.getJobs();
+          const allScored = scoreAllJobs(jobs);
+          // Separate STR jobs from main dashboard — STR is a separate division
+          const mitScored = allScored.filter(sj => sj.job.type !== 'STR');
+          const strScored = allScored.filter(sj => sj.job.type === 'STR');
+          // Re-rank MIT jobs only
+          mitScored.forEach((s, idx) => { s.rank = idx + 1; });
+          const summary = buildSummary(mitScored, allScored);
+          return { id: config.id, name: config.name, scoredJobs: mitScored, strJobs: strScored, summary };
+        })(),
+        90000,
+        config.name,
+      );
     })
   );
 
