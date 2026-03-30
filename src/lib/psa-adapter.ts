@@ -538,7 +538,16 @@ class PSASession {
       jobs.push(job);
     }
 
-    console.log(`[PSA:${this.config.id}] Closed jobs after territory/year filter: ${jobs.length}`);
+    // Log target jobs we're looking for
+    const targetSeqs = ['3477', '3234', '3520', '3421', '3159'];
+    for (const row of (data.aaData || [])) {
+      const jn = row[0] || row[1] || '';
+      if (targetSeqs.some(seq => jn.includes(seq))) {
+        console.log(`[PSA:${this.config.id}] TARGET CLOSED JOB FOUND in raw data: ${jn} (row: ${JSON.stringify(row.slice(0,6))})`);
+      }
+    }
+
+    console.log(`[PSA:${this.config.id}] Closed jobs after territory/year filter: ${jobs.length} (from ${data.aaData?.length || 0} fetched, ${data.iTotalDisplayRecords} total in PSA)`);
     return jobs;
   }
 
@@ -1050,7 +1059,7 @@ class PSASession {
     // Also fetch recent closed jobs — PSA moves completed jobs to "Closed" even if not invoiced
     // We include them and let the post-enrich filter remove completed+invoiced ones
     console.log(`[PSA:${this.config.id}] Fetching recent closed jobs...`);
-    const closedJobs = await this.fetchRecentClosedJobs(300);
+    const closedJobs = await this.fetchRecentClosedJobs(500);
     console.log(`[PSA:${this.config.id}] Recent closed jobs (filtered): ${closedJobs.length}`);
 
     const seenIds = new Set(openJobs.map(j => j.job_id));
