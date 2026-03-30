@@ -34,6 +34,7 @@ export async function GET(request: NextRequest) {
         pm: j.projectManager,
         tech: j.assignedTech,
         bd: j.businessDev,
+        psaDateDescriptions: j.psaDateDescriptions,
       };
     });
 
