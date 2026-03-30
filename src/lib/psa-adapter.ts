@@ -1167,9 +1167,10 @@ function mapJobTypeCode(code: string): JobType {
 
 function mapStatus(psaStatus: string): WorkflowStatus {
   const s = (psaStatus || '').toLowerCase().trim();
-  if (s.includes('complet') || s.includes('closed') || s.includes('done') || s.includes('invoic')) return 'Completed';
+  if (s.includes('paid') || s.includes('invoic') || s.includes('collect') || s.includes('write off')) return 'Completed';
+  if (s.includes('complet') || s.includes('closed') || s.includes('done')) return 'Completed';
   if (s.includes('wip') || s.includes('work in') || s.includes('active') || s.includes('production') || s.includes('in progress')) return 'WIP';
-  if (s.includes('approv') || s.includes('pending') || s.includes('estimat') || s.includes('waiting') || s.includes('submitted')) return 'Sales';
+  if (s === 'sales' || s.includes('approv') || s.includes('pending') || s.includes('estimat') || s.includes('waiting') || s.includes('submitted')) return 'Sales';
   if (s.includes('inspect') || s.includes('assess') || s.includes('scope')) return 'Scoped';
   if (s.includes('receiv') || s.includes('intake') || s === 'open' || !s || s === 'new' || s.includes('no date')) return 'Received';
   return 'Received';
