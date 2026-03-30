@@ -882,11 +882,16 @@ class PSASession {
 
     if (!openedDate) openedDate = new Date().toISOString().split('T')[0];
 
-    // Status derivation
+    // Status derivation — use PSA's STAGE field from the job list as primary source,
+    // with date-based logic as fallback
     let status: WorkflowStatus;
+    const psaStage = (raw.status || '').toLowerCase().trim();
     const altStatus = (detail?.alt_status || '').toLowerCase();
 
-    // Only match FULL job completion, not sub-phases like "Mitigation Complete" or "Estimate Complete"
+    // Map PSA stage values to our workflow statuses
+    const stageStatus = mapStatus(psaStage);
+
+    // Date-based overrides for more precision
     const subPhaseWords = ['mitig', 'estimate', 'pack', 'demo', 'drying', 'phase', 'clear'];
     const isSubPhaseComplete = altStatus.includes('complete') && subPhaseWords.some(w => altStatus.includes(w));
     const altStatusIsJobComplete = (
@@ -894,23 +899,23 @@ class PSASession {
       altStatus.includes('closed') || altStatus.includes('write off') || altStatus.includes('invoiced') ||
       (altStatus.includes('complete') && !isSubPhaseComplete)
     );
-    const altStatusIndicatesSales = altStatus.includes('submitted') || altStatus.includes('review') ||
-      altStatus.includes('negotiat') || altStatus.includes('in process');
-    const altStatusIndicatesWIP = altStatus.includes('appointment') || altStatus.includes('hold');
 
-    // Alt status indicating full job completion overrides date-based logic
-    // because many completed jobs have productionStartDate but no completedDate in dates
     if (completedDate || altStatusIsJobComplete) {
       status = 'Completed';
-    } else if (productionStartDate || altStatusIndicatesWIP) {
+    } else if (stageStatus !== 'Received') {
+      // Trust the PSA stage if it's anything other than the default
+      status = stageStatus;
+    } else if (productionStartDate) {
       status = 'WIP';
-    } else if (approvedDate || estimateSubmittedDate || altStatusIndicatesSales) {
+    } else if (approvedDate || estimateSubmittedDate) {
       status = 'Sales';
     } else if (inspectedDate || estimateCompletedDate) {
       status = 'Scoped';
     } else {
       status = 'Received';
     }
+
+    console.log(`[PSA:${this.config.id}] Status for ${raw.job_number}: stage="${psaStage}" → ${stageStatus}, final=${status}`);
 
     // ─── Resolve People Roles via Team Registry ─────────────────────────────
     const noteEmployees = psaNotes.map(n => n.employee).filter(Boolean);
@@ -1023,7 +1028,7 @@ class PSASession {
       opsManager: roles.opsManager,
       estimator: roles.estimator,
       businessDev: roles.bd,
-      psaAltStatus: detail?.alt_status || '',
+      psaAltStatus: `stage:${raw.status || ''}|alt:${detail?.alt_status || ''}`,
       psaDateDescriptions: Object.keys(detail?.dates || {}),
     };
   }
