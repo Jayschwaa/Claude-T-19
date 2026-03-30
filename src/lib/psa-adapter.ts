@@ -1028,7 +1028,7 @@ class PSASession {
       opsManager: roles.opsManager,
       estimator: roles.estimator,
       businessDev: roles.bd,
-      psaAltStatus: `stage:${raw.status || ''}|alt:${detail?.alt_status || ''}`,
+      psaAltStatus: `stage:${raw.status || ''}|alt:${detail?.alt_status || ''}|dates:${Object.keys(detail?.dates || {}).length}`,
       psaDateDescriptions: Object.keys(detail?.dates || {}),
     };
   }
