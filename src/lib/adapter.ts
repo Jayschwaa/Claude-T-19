@@ -1,7 +1,7 @@
 import { DataAdapter, Job } from './types';
 import { generateMockJobs } from './mock-data';
 import { createPSAAdapter, createPSAAdapterForConfig } from './psa-adapter';
-import { PSALocationConfig } from './psa-config';
+import { PSALocationConfig, getLocationConfigs } from './psa-config';
 
 let cachedMockJobs: Job[] | null = null;
 
@@ -110,6 +110,35 @@ export function createAdapterForLocation(config: PSALocationConfig): DataAdapter
   const adapter = new SafePSAAdapterForLocation(config);
   locationAdapters.set(config.id, adapter);
   return adapter;
+}
+
+/**
+ * Force-refresh all cached location adapters.
+ * Clears in-memory cache and re-fetches from PSA.
+ * Used by the cron job for daily 4 AM refresh.
+ */
+export async function refreshAllLocations(): Promise<{ location: string; jobCount: number; error?: string }[]> {
+  const configs = getLocationConfigs();
+  const results: { location: string; jobCount: number; error?: string }[] = [];
+
+  for (const config of configs) {
+    try {
+      console.log(`[Cron] Refreshing ${config.name}...`);
+      // Remove cached adapter to force fresh fetch
+      locationAdapters.delete(config.id);
+      const adapter = new SafePSAAdapterForLocation(config);
+      locationAdapters.set(config.id, adapter);
+      const jobs = await adapter.getJobs();
+      results.push({ location: config.name, jobCount: jobs.length });
+      console.log(`[Cron] ${config.name}: ${jobs.length} jobs refreshed`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[Cron] ${config.name} failed: ${msg}`);
+      results.push({ location: config.name, jobCount: 0, error: msg });
+    }
+  }
+
+  return results;
 }
 
 /**
