@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { getLocationConfigs } from '@/lib/psa-config';
-import { createPSAAdapterForConfig } from '@/lib/psa-adapter';
 
 export const dynamic = 'force-dynamic';
 
@@ -8,8 +7,8 @@ export const dynamic = 'force-dynamic';
  * GET /api/debug-search?location=t19&seq=3520,3159,3442,3447,3436,3404,3390
  *
  * Searches PSA's Open and Closed job lists for specific job number sequences.
- * Scans ALL pages of both lists to find jobs regardless of how deep they are.
- * Does NOT enrich — just shows raw list data to identify where jobs live.
+ * Reuses a single login session for proper pagination.
+ * Scans ALL pages to find jobs regardless of depth.
  */
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -22,54 +21,50 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: `Unknown location: ${locationId}` }, { status: 400 });
   }
 
-  // Access PSA session directly via internal class
-  // We need raw list access, so we create a fresh adapter
   const results: {
     seq: string;
-    found: boolean;
     list: string;
     jobNumber: string;
     rawRow: string[];
     territory: string;
     year: string;
     type: string;
+    page: number;
   }[] = [];
 
+  // Disable TLS validation (PSA uses self-signed cert)
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
   try {
-    // Search both Open and Closed lists
+    // Login once, reuse cookies
+    const loginRes = await fetch(`${config.baseUrl}/Account/Login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        Username: config.username,
+        Password: config.password,
+        Schema: config.schema,
+      }).toString(),
+      redirect: 'manual',
+    });
+
+    const rawCookies = loginRes.headers.getSetCookie?.() || [];
+    const cookieStr = rawCookies.map(c => c.split(';')[0]).join('; ');
+    if (!cookieStr) {
+      return NextResponse.json({ error: 'Login failed — no cookies returned' }, { status: 500 });
+    }
+
+    const listStats: Record<string, { totalInPSA: number; pagesScanned: number; rowsScanned: number }> = {};
+
+    // Search both Open and Closed lists with same session
     for (const option of ['Open', 'Closed']) {
       let offset = 0;
       const pageSize = 300;
       let total: number | null = null;
       let pagesScanned = 0;
-      const maxPages = option === 'Closed' ? 10 : 5; // Scan up to 3000 closed, 1500 open
+      const maxPages = option === 'Closed' ? 15 : 5; // Scan up to 4500 closed
 
       while ((total === null || offset < total) && pagesScanned < maxPages) {
-        // Use fetch directly to PSA
-        const baseUrl = config.baseUrl;
-        const loginUrl = `${baseUrl}/Account/Login`;
-        const listUrl = `${baseUrl}/Job/Job/ListFilter`;
-
-        // Login first
-        const loginRes = await fetch(loginUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({
-            Username: config.username,
-            Password: config.password,
-            Schema: config.schema,
-          }).toString(),
-          redirect: 'manual',
-        });
-
-        const cookies = loginRes.headers.getSetCookie?.() || [];
-        const cookieStr = cookies.map(c => c.split(';')[0]).join('; ');
-
-        if (!cookieStr) {
-          return NextResponse.json({ error: 'Login failed — no cookies' }, { status: 500 });
-        }
-
-        // Fetch job list page
         const formData = new URLSearchParams();
         formData.set('option', option);
         formData.set('iDisplayStart', String(offset));
@@ -84,7 +79,7 @@ export async function GET(request: Request) {
           formData.set(`mDataProp_${i}`, `col${i}`);
         }
 
-        const listRes = await fetch(listUrl, {
+        const listRes = await fetch(`${config.baseUrl}/Job/Job/ListFilter`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
@@ -95,46 +90,50 @@ export async function GET(request: Request) {
 
         const body = await listRes.text();
         if (body.trimStart().startsWith('<!DOCTYPE') || body.trimStart().startsWith('<html')) {
-          break; // Session issue
+          break;
         }
 
         const data = JSON.parse(body);
         total = data.iTotalDisplayRecords || 0;
         const rows = data.aaData || [];
+        pagesScanned++;
 
         for (const row of rows) {
           const jobNum = String(row[0] || row[1] || '');
           for (const seq of targetSeqs) {
-            if (jobNum.includes(seq) && !results.find(r => r.seq === seq && r.jobNumber === jobNum)) {
-              // Parse job number parts
+            if (jobNum.includes(seq)) {
               const parts = jobNum.split('-');
               results.push({
                 seq,
-                found: true,
                 list: option,
                 jobNumber: jobNum,
                 rawRow: row.slice(0, 10).map(String),
                 territory: parts[0] || '',
                 year: parts[1] || '',
                 type: parts.length >= 4 ? parts[3].split(';')[0] : '',
+                page: pagesScanned,
               });
             }
           }
         }
 
-        offset += pageSize;
-        pagesScanned++;
-
+        offset += rows.length;
         if (rows.length < pageSize) break;
       }
+
+      listStats[option] = {
+        totalInPSA: total || 0,
+        pagesScanned,
+        rowsScanned: offset,
+      };
     }
 
-    // Check which sequences were NOT found
     const missing = targetSeqs.filter(seq => !results.find(r => r.seq === seq));
 
     return NextResponse.json({
       location: config.name,
       searchedFor: targetSeqs,
+      listStats,
       found: results,
       missing,
       foundCount: results.length,
