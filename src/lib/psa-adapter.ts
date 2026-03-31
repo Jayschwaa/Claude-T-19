@@ -1276,26 +1276,52 @@ class PSASession {
     }
 
     // Post-enrich: handle closed-sourced jobs
-    // PSA moves completed jobs to "Closed" list — treat all closed-sourced jobs as Completed
-    // (they may not have completedDate detected if enrichment detail page was flaky)
+    // PSA moves ALL finished jobs (completed, canceled, abandoned) to "Closed" list.
+    // Only mark as Completed if there's evidence of real completion:
+    // - Has a completedDate detected from date descriptions
+    // - Has WIP-level dates (actual start) suggesting work was done
+    // - Has significant revenue (work was performed)
+    // Otherwise, these are likely canceled/abandoned jobs — exclude them.
+    const closedKept: Job[] = [];
+    const closedExcluded: string[] = [];
     for (const j of enriched) {
       const isFromClosedList = closedJobIds.has(Number(j.id));
       if (isFromClosedList) {
-        // Force status to Completed — PSA already classified these as closed
-        if (j.status !== 'Completed') {
-          console.log(`[PSA:${this.config.id}] Closed-sourced job ${j.jobNumber} status ${j.status} → Completed`);
-          (j as any).status = 'Completed';
-        }
-        // Set completedDate if not detected (use lastActivityDate as fallback)
-        if (!j.completedDate) {
-          (j as any).completedDate = j.lastActivityDate;
+        const hasCompletionEvidence = j.completedDate ||
+          j.status === 'Completed' ||
+          j.status === 'WIP' ||  // Had actual start date = work was done
+          j.estimateAmount > 500; // Significant revenue = real job
+
+        if (hasCompletionEvidence) {
+          // Mark as Completed if not already
+          if (j.status !== 'Completed') {
+            console.log(`[PSA:${this.config.id}] Closed-sourced job ${j.jobNumber} status ${j.status} → Completed (has evidence: completed=${j.completedDate}, revenue=$${j.estimateAmount})`);
+            (j as any).status = 'Completed';
+          }
+          if (!j.completedDate) {
+            (j as any).completedDate = j.lastActivityDate;
+          }
+          closedKept.push(j);
+        } else {
+          // No evidence of completion — likely canceled/abandoned
+          console.log(`[PSA:${this.config.id}] Excluding closed job without completion evidence: ${j.jobNumber} (status=${j.status}, revenue=$${j.estimateAmount})`);
+          closedExcluded.push(j.jobNumber);
         }
       }
     }
 
+    // Remove excluded closed jobs from enriched list
+    const afterClosedFilter = enriched.filter(j => {
+      if (closedJobIds.has(Number(j.id)) && closedExcluded.includes(j.jobNumber)) return false;
+      return true;
+    });
+    if (closedExcluded.length > 0) {
+      console.log(`[PSA:${this.config.id}] Excluded ${closedExcluded.length} closed jobs without completion evidence`);
+    }
+
     // Filter: only exclude completed+invoiced jobs (fully done, no action needed)
     const targetSeqsForFilter = ['3477', '3234', '3520', '3468', '3424', '3421', '3159', '3442', '3447', '3436', '3404', '3390'];
-    const active = enriched.filter(j => {
+    const active = afterClosedFilter.filter(j => {
       const isTarget = targetSeqsForFilter.some(seq => j.jobNumber.includes(seq));
       if (j.completedDate && j.invoicedDate) {
         if (isTarget) {
@@ -1310,7 +1336,7 @@ class PSASession {
       return true;
     });
 
-    console.log(`[PSA:${this.config.id}] After filter: ${active.length} active jobs (excluded ${enriched.length - active.length} completed+invoiced)`);
+    console.log(`[PSA:${this.config.id}] After filter: ${active.length} active jobs (excluded ${afterClosedFilter.length - active.length} completed+invoiced, ${closedExcluded.length} abandoned closed)`);
     return active;
   }
 }

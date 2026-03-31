@@ -69,8 +69,8 @@ All PSA endpoints were reverse-engineered from browser network traffic. There is
 
 | Location | ID | Schema | Territory | Year |
 |----------|----|--------|-----------|------|
-| T-19 Pompano (South Florida) | `t19` | 1022 | 19 | 26 |
-| Omaha | `omaha` | 1520 | null (all) | 26 |
+| T-19 Pompano (South Florida) | `t19` | 1022 | 19 | 25, 26 |
+| Omaha | `omaha` | 1520 | null (all) | 25, 26 |
 
 ## Team Role Registry
 
@@ -119,11 +119,38 @@ Set these on Railway. For local dev, use `.env.local`.
 4. Test column mapping — check logs for first row sample, update `parseRowToJob()` if needed
 5. Push to main → auto-deploys
 
+### API Endpoints
+- **`/api/health`** — Health check
+- **`/api/cron`** — Force-refresh all PSA data (daily 4 AM ET auto-runs via instrumentation.ts)
+- **`/api/audit?location=t19`** — Self-audit: dashboard vs PSA Control Center counts (accounts for STR separation)
+- **`/api/debug-all-statuses?location=t19`** — All jobs with status/revenue/dates
+- **`/api/debug-dates?location=t19&job=19-26-3477-PLM`** — PSA date descriptions for a job
+- **`/api/debug-search?location=t19&seq=3520,3159`** — Deep search for job sequences across Open/Closed lists
+
+### Data Refresh
+- **Daily at 4:00 AM ET** — `src/instrumentation.ts` schedules automatic PSA data refresh
+- **Startup warmup** — 30 seconds after deploy, all locations are pre-fetched
+- **Manual refresh** — Hit `/api/cron` to force-refresh immediately
+- **Cache TTL** — 15 minutes at adapter level; module-level singleton persists until container restart
+
+### STR Jobs
+STR (Structure/Reconstruction) jobs are separated from the main pipeline. They appear in their own **STR Summary** card at the top of the dashboard. PSA's Control Center counts STR in pipeline buckets, but we do NOT — this is intentional.
+
+### Revenue Sources (priority order)
+1. `TotalRevenue.Estimate` from Financial tab
+2. `TotalRevenue.Actual` from Financial tab
+3. Revenue display field from Job Edit page
+4. Completed display field from Job Edit page
+5. Amount column from Job List
+6. **Fallback:** Estimate folder (most recent by due date) — only fetched if sources 1-5 return $0
+
 ### Debugging
 - **Login failures:** Check Railway logs for `[PSA] Login` messages
-- **Missing jobs:** Check year/territory filters in `psa-config.ts`
+- **Missing jobs:** Check year/territory filters in `psa-config.ts`; run `/api/debug-search` to scan raw PSA lists
 - **Wrong data in fields:** Check column mapping in `parseRowToJob()`, log first row
-- **Slow loading:** Normal — 188+ jobs × 3 requests each
+- **Wrong status:** Check date descriptions via `/api/debug-dates`; status derived from PSA date types
+- **Slow loading:** Normal — 60+ jobs × 3-4 requests each
+- **Over-classification of Completed:** Closed-sourced jobs need completion evidence (dates, WIP status, or >$500 revenue)
 
 ### Running locally
 ```bash
