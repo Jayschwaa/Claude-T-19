@@ -14,39 +14,38 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 }
 
 /**
- * Location-specific PSA adapter with background loading and caching.
+ * Location-specific PSA adapter with caching.
  * NEVER falls back to mock data — waits for real PSA data or throws.
+ * Uses a single in-flight promise to prevent concurrent PSA session conflicts.
  */
 class CachedPSAAdapter implements DataAdapter {
   private psa: DataAdapter;
   private cached: Job[] | null = null;
-  private loading = false;
+  private inflight: Promise<Job[]> | null = null;
 
   constructor(private config: PSALocationConfig) {
     this.psa = createPSAAdapterForConfig(config);
   }
 
-  private startBackgroundLoad(): void {
-    if (this.loading) return;
-    this.loading = true;
-    this.psa.getJobs().then(
-      (jobs) => { this.cached = jobs; },
-      () => { this.loading = false; },
-    );
-  }
-
   async getJobs(): Promise<Job[]> {
     if (this.cached) return this.cached;
-    this.startBackgroundLoad();
-    try {
-      const jobs = await withTimeout(this.psa.getJobs(), 600000, `PSA [${this.config.id}]`);
-      this.cached = jobs;
-      return jobs;
-    } catch (e) {
-      this.loading = false;
-      const msg = e instanceof Error ? e.message : String(e);
-      throw new Error(`PSA data not available for ${this.config.name}: ${msg}`);
-    }
+
+    // Reuse in-flight fetch to prevent concurrent PSA session conflicts
+    if (this.inflight) return this.inflight;
+
+    this.inflight = withTimeout(this.psa.getJobs(), 600000, `PSA [${this.config.id}]`)
+      .then((jobs) => {
+        this.cached = jobs;
+        this.inflight = null;
+        return jobs;
+      })
+      .catch((e) => {
+        this.inflight = null;
+        const msg = e instanceof Error ? e.message : String(e);
+        throw new Error(`PSA data not available for ${this.config.name}: ${msg}`);
+      });
+
+    return this.inflight;
   }
 
   async getJob(id: string): Promise<Job | null> {
