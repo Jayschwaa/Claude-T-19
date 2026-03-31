@@ -1,91 +1,80 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getLocationConfigs } from '@/lib/psa-config';
+import { createAdapterForLocation } from '@/lib/adapter';
 import { debugJobDetail } from '@/lib/psa-adapter';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * GET /api/debug-financial?jobId=12345
+ * GET /api/debug-financial?location=t19&job=3190
  *
- * Fetches raw financial data from PSA for a specific job ID.
- * Shows the detail page revenue fields and financial table parsing.
+ * Looks up a job by sequence number from cached data, then fetches its
+ * detail page via debugJobDetail to show raw revenue/financial parsing.
+ * Also shows the enriched job data for comparison.
  */
 export async function GET(request: NextRequest) {
-  const jobIdStr = request.nextUrl.searchParams.get('jobId');
-  if (!jobIdStr) {
-    return NextResponse.json({ error: 'Missing jobId parameter. Use ?jobId=12345' }, { status: 400 });
-  }
+  const locationId = request.nextUrl.searchParams.get('location') || 't19';
+  const jobSeq = request.nextUrl.searchParams.get('job') || '';
+  const jobIdParam = request.nextUrl.searchParams.get('jobId');
 
-  const jobId = parseInt(jobIdStr);
-  if (isNaN(jobId)) {
-    return NextResponse.json({ error: 'jobId must be a number' }, { status: 400 });
+  const config = getLocationConfigs().find(c => c.id === locationId);
+  if (!config) {
+    return NextResponse.json({ error: `No config for '${locationId}'` }, { status: 400 });
   }
 
   try {
-    const config = getLocationConfigs()[0]; // T-19
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+    const adapter = createAdapterForLocation(config);
+    const jobs = await adapter.getJobs();
 
-    // Use the PSA session to fetch financial data directly
-    const { PSASession } = await import('@/lib/psa-adapter') as any;
+    // Find the job by sequence number or direct jobId
+    let jobId: number | null = jobIdParam ? parseInt(jobIdParam) : null;
+    let matchedJob = null;
 
-    // Fetch detail page
-    const detail = await debugJobDetail(jobId);
+    if (jobSeq) {
+      matchedJob = jobs.find(j => j.jobNumber.includes(jobSeq));
+      if (matchedJob) {
+        jobId = parseInt(matchedJob.id);
+      }
+    } else if (jobId) {
+      matchedJob = jobs.find(j => j.id === String(jobId));
+    }
 
-    // Also fetch financial page directly to see raw HTML
-    const loginRes = await fetch(`${config.baseUrl}/Account/Login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        Username: config.username,
-        Password: config.password,
-        Schema: config.schema,
-      }).toString(),
-      redirect: 'manual',
-    });
-
-    const rawCookies = loginRes.headers.getSetCookie?.() || [];
-    const cookieStr = rawCookies.map((c: string) => c.split(';')[0]).join('; ');
-
-    // Follow redirect to transfer
-    const location = loginRes.headers.get('location') || '';
-    if (location) {
-      await fetch(`${config.baseUrl}${location}`, {
-        method: 'GET',
-        headers: { Cookie: cookieStr },
-        redirect: 'manual',
+    if (!jobId) {
+      // List available jobs for reference
+      const available = jobs.slice(0, 20).map(j => ({
+        jobNumber: j.jobNumber,
+        id: j.id,
+        revenue: j.estimateAmount,
+      }));
+      return NextResponse.json({
+        error: `Job not found. Use ?job=3190 (seq) or ?jobId=12345 (PSA ID)`,
+        availableJobs: available,
       });
     }
 
-    const financialRes = await fetch(
-      `${config.baseUrl}/Job/Financial/List?linkID=${jobId}&UpdateTargetId=FinancialTab&Source=Job`,
-      { headers: { Cookie: cookieStr } },
-    );
-    const financialHtml = await financialRes.text();
+    // Fetch raw detail from PSA
+    const rawDetail = await debugJobDetail(jobId);
 
-    // Extract key financial tokens
-    const cleanHtml = financialHtml.replace(/<script[^>]*>.*?<\/script>/gs, '').replace(/<[^>]+>/g, '\t');
-    const tokens = cleanHtml.split('\t').map((t: string) => t.trim()).filter(Boolean);
-    const revenueIdx = tokens.findIndex((t: string) => t === 'Revenue');
-    const revenueContext = revenueIdx >= 0 ? tokens.slice(revenueIdx, revenueIdx + 8) : [];
-
-    // Hidden input totals
-    const totalRevEstMatch = financialHtml.match(/name="TotalRevenue\.Estimate"[^>]*value="([^"]*)"/i)
-      || financialHtml.match(/id="TotalRevenue_Estimate"[^>]*value="([^"]*)"/i);
-    const totalRevActMatch = financialHtml.match(/name="TotalRevenue\.Actual"[^>]*value="([^"]*)"/i)
-      || financialHtml.match(/id="TotalRevenue_Actual"[^>]*value="([^"]*)"/i);
+    // Show the enriched job data for comparison
+    const enrichedData = matchedJob ? {
+      jobNumber: matchedJob.jobNumber,
+      customer: matchedJob.customerName,
+      status: matchedJob.status,
+      estimateAmount: matchedJob.estimateAmount,
+      supplementAmount: matchedJob.supplementAmount,
+      type: matchedJob.type,
+      openedDate: matchedJob.openedDate,
+      receivedDate: matchedJob.receivedDate,
+      completedDate: matchedJob.completedDate,
+      invoicedDate: matchedJob.invoicedDate,
+      psaAltStatus: matchedJob.psaAltStatus,
+      psaDateDescriptions: matchedJob.psaDateDescriptions,
+    } : null;
 
     return NextResponse.json({
       jobId,
-      detail,
-      financial: {
-        htmlLength: financialHtml.length,
-        isHtmlPage: financialHtml.trimStart().startsWith('<!DOCTYPE') || financialHtml.trimStart().startsWith('<html'),
-        totalRevEstimate: totalRevEstMatch?.[1] || 'NOT FOUND',
-        totalRevActual: totalRevActMatch?.[1] || 'NOT FOUND',
-        revenueTokenContext: revenueContext,
-        totalTokens: tokens.length,
-        first50tokens: tokens.slice(0, 50),
-      },
+      enrichedJob: enrichedData,
+      rawPSADetail: rawDetail,
     });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
