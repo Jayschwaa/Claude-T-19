@@ -2,7 +2,7 @@ import { getLocationConfigs } from '@/lib/psa-config';
 import { createAdapterForLocation } from '@/lib/adapter';
 import { scoreAllJobs } from '@/lib/scoring-engine';
 import DashboardClient from '@/components/DashboardClient';
-import { LocationData, DashboardSummary } from '@/lib/types';
+import { LocationData, DashboardSummary, isSTRDivisionJob } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -86,10 +86,10 @@ function buildSummary(scored: ReturnType<typeof scoreAllJobs>, allScored: Return
   summary.allTechs = Array.from(techSet).sort();
   summary.allBDs = Array.from(bdSet).sort();
 
-  // STR Summary — computed from ALL jobs (including STR)
+  // STR Summary — STR, RCN/RECON, and STC jobs all go into the STR division
   for (const sj of allScored) {
     const j = sj.job;
-    if (j.type === 'STR') {
+    if (isSTRDivisionJob(j)) {
       summary.strTotalJobs++;
       const signed = ['Sales', 'WIP', 'Completed'].includes(j.status) && j.approvedDate;
       if (signed) {
@@ -126,9 +126,9 @@ export default async function Dashboard() {
           const adapter = createAdapterForLocation(config);
           const jobs = await adapter.getJobs();
           const allScored = scoreAllJobs(jobs);
-          // Separate STR jobs from main dashboard — STR is a separate division
-          const mitScored = allScored.filter(sj => sj.job.type !== 'STR');
-          const strScored = allScored.filter(sj => sj.job.type === 'STR');
+          // Separate STR division jobs (STR, RECON, STC) from main pipeline
+          const mitScored = allScored.filter(sj => !isSTRDivisionJob(sj.job));
+          const strScored = allScored.filter(sj => isSTRDivisionJob(sj.job));
           // Re-rank MIT jobs only
           mitScored.forEach((s, idx) => { s.rank = idx + 1; });
           const summary = buildSummary(mitScored, allScored);

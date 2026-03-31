@@ -2,6 +2,16 @@
 export type JobType = 'WTR' | 'MLD' | 'STR' | 'FIR' | 'BIO' | 'CNTNT' | 'DUCT' | 'RECON' | 'OTHER';
 export type WorkflowStatus = 'Received' | 'Scoped' | 'Sales' | 'WIP' | 'Completed';
 
+// STR Division: STR, RCN/RECON, and STC jobs all belong in the STR Summary, not the MIT pipeline.
+// STC is Omaha's transit/structure code; RCN is reconstruction.
+const STR_DIVISION_CODES = new Set(['STR', 'RCN', 'STC']);
+export function isSTRDivisionJob(job: { type: JobType; jobNumber: string }): boolean {
+  if (job.type === 'STR' || job.type === 'RECON') return true;
+  const parts = job.jobNumber.split('-');
+  const rawCode = parts.length >= 4 ? parts[3].split(';')[0].toUpperCase() : '';
+  return STR_DIVISION_CODES.has(rawCode);
+}
+
 export interface JobNote {
   date: string;
   author: string;

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getLocationConfigs } from '@/lib/psa-config';
 import { createAdapterForLocation } from '@/lib/adapter';
 import { scoreAllJobs } from '@/lib/scoring-engine';
+import { isSTRDivisionJob } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,9 +28,9 @@ export async function GET(request: Request) {
     const jobs = await adapter.getJobs();
     const allScored = scoreAllJobs(jobs);
 
-    // Our dashboard splits: MIT jobs in pipeline, STR jobs in separate card
-    const mitJobs = allScored.filter(sj => sj.job.type !== 'STR');
-    const strJobs = allScored.filter(sj => sj.job.type === 'STR');
+    // Our dashboard splits: MIT jobs in pipeline, STR division (STR/RECON/STC) in separate card
+    const mitJobs = allScored.filter(sj => !isSTRDivisionJob(sj.job));
+    const strJobs = allScored.filter(sj => isSTRDivisionJob(sj.job));
 
     // Pipeline counts (MIT only — what our dashboard shows in the status bar)
     const dashboardCounts: Record<string, number> = {};

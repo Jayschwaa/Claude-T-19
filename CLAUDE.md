@@ -133,8 +133,8 @@ Set these on Railway. For local dev, use `.env.local`.
 - **Manual refresh** — Hit `/api/cron` to force-refresh immediately
 - **Cache TTL** — 15 minutes at adapter level; module-level singleton persists until container restart
 
-### STR Jobs
-STR (Structure/Reconstruction) jobs are separated from the main pipeline. They appear in their own **STR Summary** card at the top of the dashboard. PSA's Control Center counts STR in pipeline buckets, but we do NOT — this is intentional.
+### STR Division
+STR, RCN/RECON, and STC jobs are all separated from the main pipeline into the **STR Summary** card. STC is Omaha's transit/structure code. Use `isSTRDivisionJob()` from `types.ts` to check membership. PSA's Control Center counts these in pipeline buckets, but we do NOT — this is intentional.
 
 ### Revenue Sources (priority order)
 1. `TotalRevenue.Estimate` from Financial tab
