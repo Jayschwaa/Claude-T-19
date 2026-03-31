@@ -137,6 +137,33 @@ export async function GET(request: Request) {
       },
 
       discrepancies: discrepancies.length > 0 ? discrepancies : ['None — counts match'],
+
+      // Track the 12 specific T-19 completed-not-invoiced jobs Jason identified
+      targetJobsCheck: locationId === 't19' ? (() => {
+        const targetSeqs = [
+          '3477', '3234', '3520', '3468', '3424', '3421', '3159',
+          '3442', '3447', '3436', '3404', '3390',
+        ];
+        const found: { jobNumber: string; status: string; type: string; revenue: string; completedDate: string | null; invoicedDate: string | null }[] = [];
+        const missing: string[] = [];
+        for (const seq of targetSeqs) {
+          const match = allScored.find(sj => sj.job.jobNumber.includes(seq));
+          if (match) {
+            found.push({
+              jobNumber: match.job.jobNumber,
+              status: match.job.status,
+              type: match.job.type,
+              revenue: fmt(match.job.estimateAmount),
+              completedDate: match.job.completedDate,
+              invoicedDate: match.job.invoicedDate,
+            });
+          } else {
+            missing.push(seq);
+          }
+        }
+        return { found, missing, foundCount: found.length, missingCount: missing.length };
+      })() : undefined,
+
       zeroRevenueJobs: {
         count: zeroRevenueJobs.length,
         jobs: zeroRevenueJobs,

@@ -499,55 +499,68 @@ class PSASession {
   }
 
   /**
-   * Fetch only the most recent closed jobs (single page, no pagination).
+   * Fetch recent closed jobs with pagination (up to maxPages pages).
    * Pre-filters by territory and year to avoid enriching irrelevant historical jobs.
+   * Paginates to find more completed-not-invoiced jobs that PSA moved to "Closed".
    */
-  async fetchRecentClosedJobs(pageSize = 100): Promise<PSARawJob[]> {
-    const formData: Record<string, string | number> = {
-      option: 'Closed',
-      iDisplayStart: 0,
-      iDisplayLength: pageSize,
-      sEcho: 1,
-      iColumns: 11,
-      iSortCol_0: 8,
-      sSortDir_0: 'desc',
-      iSortingCols: 1,
-      mDataProp_10: 'id',
-    };
-    for (let i = 0; i < 10; i++) {
-      formData[`mDataProp_${i}`] = `col${i}`;
-    }
-
-    const body = await this.psaPost('/Job/Job/ListFilter', formData);
-    if (body.trimStart().startsWith('<!DOCTYPE') || body.trimStart().startsWith('<html')) {
-      console.warn(`[PSA:${this.config.id}] Closed jobs returned HTML — skipping`);
-      return [];
-    }
-
-    const data = JSON.parse(body);
-    console.log(`[PSA:${this.config.id}] Closed jobs total in PSA: ${data.iTotalDisplayRecords}, fetched first ${Math.min(pageSize, data.aaData?.length || 0)}`);
-
+  async fetchRecentClosedJobs(pageSize = 300): Promise<PSARawJob[]> {
+    const maxPages = 3; // Up to 3 pages = 900 closed jobs scanned
     const jobs: PSARawJob[] = [];
-    for (const row of (data.aaData || [])) {
-      const job = this.parseRowToJob(row);
-      this.parseJobNumber(job);
-      // Pre-filter: only keep jobs matching territory and year
-      if (this.config.territoryFilter && job.territory !== this.config.territoryFilter) continue;
-      if (this.config.yearFilter.length > 0 && !this.config.yearFilter.includes(job.year)) continue;
-      if (EXCLUDED_PSA_TYPES.has(job.job_type_code.toUpperCase())) continue;
-      jobs.push(job);
-    }
+    const targetSeqs = ['3477', '3234', '3520', '3468', '3424', '3421', '3159'];
+    let totalInPSA = 0;
+    let totalFetched = 0;
 
-    // Log target jobs we're looking for
-    const targetSeqs = ['3477', '3234', '3520', '3421', '3159'];
-    for (const row of (data.aaData || [])) {
-      const jn = row[0] || row[1] || '';
-      if (targetSeqs.some(seq => jn.includes(seq))) {
-        console.log(`[PSA:${this.config.id}] TARGET CLOSED JOB FOUND in raw data: ${jn} (row: ${JSON.stringify(row.slice(0,6))})`);
+    for (let page = 0; page < maxPages; page++) {
+      const offset = page * pageSize;
+      const formData: Record<string, string | number> = {
+        option: 'Closed',
+        iDisplayStart: offset,
+        iDisplayLength: pageSize,
+        sEcho: 1,
+        iColumns: 11,
+        iSortCol_0: 8,
+        sSortDir_0: 'desc',
+        iSortingCols: 1,
+        mDataProp_10: 'id',
+      };
+      for (let i = 0; i < 10; i++) {
+        formData[`mDataProp_${i}`] = `col${i}`;
       }
+
+      const body = await this.psaPost('/Job/Job/ListFilter', formData);
+      if (body.trimStart().startsWith('<!DOCTYPE') || body.trimStart().startsWith('<html')) {
+        console.warn(`[PSA:${this.config.id}] Closed jobs page ${page + 1} returned HTML — stopping`);
+        break;
+      }
+
+      const data = JSON.parse(body);
+      totalInPSA = data.iTotalDisplayRecords || 0;
+      const rows = data.aaData || [];
+      totalFetched += rows.length;
+
+      console.log(`[PSA:${this.config.id}] Closed jobs page ${page + 1}: fetched ${rows.length} (offset ${offset}, total in PSA: ${totalInPSA})`);
+
+      for (const row of rows) {
+        const job = this.parseRowToJob(row);
+        this.parseJobNumber(job);
+
+        // Log target jobs found in raw data
+        if (targetSeqs.some(seq => job.job_number.includes(seq))) {
+          console.log(`[PSA:${this.config.id}] TARGET CLOSED JOB FOUND: ${job.job_number} (territory=${job.territory}, year=${job.year}, type=${job.job_type_code})`);
+        }
+
+        // Pre-filter: only keep jobs matching territory and year
+        if (this.config.territoryFilter && job.territory !== this.config.territoryFilter) continue;
+        if (this.config.yearFilter.length > 0 && !this.config.yearFilter.includes(job.year)) continue;
+        if (EXCLUDED_PSA_TYPES.has(job.job_type_code.toUpperCase())) continue;
+        jobs.push(job);
+      }
+
+      // Stop if we've fetched all available or no more rows
+      if (rows.length < pageSize || offset + rows.length >= totalInPSA) break;
     }
 
-    console.log(`[PSA:${this.config.id}] Closed jobs after territory/year filter: ${jobs.length} (from ${data.aaData?.length || 0} fetched, ${data.iTotalDisplayRecords} total in PSA)`);
+    console.log(`[PSA:${this.config.id}] Closed jobs after territory/year filter: ${jobs.length} (scanned ${totalFetched} of ${totalInPSA} total in PSA)`);
     return jobs;
   }
 
@@ -753,6 +766,97 @@ class PSASession {
     return financial;
   }
 
+  /**
+   * Fetch estimates from the PSA estimate/attachment folder for a job.
+   * Returns estimates sorted by due date (most recent first).
+   * Used as a fallback revenue source when financial table returns $0.
+   */
+  async fetchJobEstimates(jobId: number): Promise<{ amount: number; dueDate: string; name: string }[]> {
+    // Try multiple possible PSA endpoints for estimates
+    const endpoints = [
+      `/Job/Estimate/List?linkID=${jobId}&Source=Job`,
+      `/Estimate/Estimate/ListFilter?linkID=${jobId}&linkSource=Job`,
+    ];
+
+    for (const endpoint of endpoints) {
+      try {
+        const html = await this.psaGet(endpoint);
+        if (!html || html.length < 50) continue;
+        if (html.includes('404') || html.includes('Not Found')) continue;
+
+        const estimates: { amount: number; dueDate: string; name: string }[] = [];
+
+        // Strip scripts, parse table rows
+        const clean = html.replace(/<script[^>]*>.*?<\/script>/gs, '');
+
+        // Look for table rows with estimate data
+        // PSA tables typically have: Name, Due Date, Amount columns
+        const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+        let rowMatch;
+        while ((rowMatch = rowRegex.exec(clean)) !== null) {
+          const rowHtml = rowMatch[1];
+          const cells = rowHtml.match(/<td[^>]*>([\s\S]*?)<\/td>/gi) || [];
+          const cellTexts = cells.map(c => c.replace(/<[^>]+>/g, '').trim());
+
+          // Find amount (dollar value) and date in this row
+          let amount = 0;
+          let dueDate = '';
+          let name = '';
+
+          for (const text of cellTexts) {
+            // Check for dollar amounts
+            const dollarMatch = text.match(/\$?([\d,]+\.?\d*)/);
+            if (dollarMatch && !amount) {
+              const val = parseFloat(dollarMatch[1].replace(/,/g, ''));
+              if (val > 0) amount = val;
+            }
+            // Check for dates
+            const dateMatch = text.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})/);
+            if (dateMatch && !dueDate) {
+              dueDate = parseDateStr(dateMatch[1]) || '';
+            }
+            // First non-date non-dollar text is the name
+            if (text.length > 2 && !text.match(/^\$/) && !text.match(/^\d{1,2}\//) && !name) {
+              name = text;
+            }
+          }
+
+          if (amount > 0) {
+            estimates.push({ amount, dueDate, name });
+          }
+        }
+
+        // Also try hidden inputs for total estimate amount
+        const totalMatch = html.match(/name="[^"]*[Tt]otal[^"]*"[^>]*value="([^"]*)"/) ||
+                          html.match(/value="([^"]*)"[^>]*name="[^"]*[Tt]otal[^"]*"/);
+        if (totalMatch) {
+          const val = parseFloat(totalMatch[1].replace(/,/g, ''));
+          if (val > 0 && !estimates.some(e => e.amount === val)) {
+            estimates.push({ amount: val, dueDate: '', name: 'Total Estimate' });
+          }
+        }
+
+        // Sort by due date descending (most recent first)
+        estimates.sort((a, b) => {
+          if (!a.dueDate && !b.dueDate) return 0;
+          if (!a.dueDate) return 1;
+          if (!b.dueDate) return -1;
+          return b.dueDate.localeCompare(a.dueDate);
+        });
+
+        if (estimates.length > 0) {
+          console.log(`[PSA:${this.config.id}] Estimates for job ${jobId}: ${estimates.length} found, highest=$${estimates[0].amount} (via ${endpoint})`);
+          return estimates;
+        }
+      } catch {
+        // Endpoint doesn't exist or error — try next
+        continue;
+      }
+    }
+
+    return [];
+  }
+
   async fetchJobNotes(jobId: number, limit = 20): Promise<PSANote[]> {
     const formData: Record<string, string | number> = {
       iDisplayStart: 0,
@@ -798,6 +902,7 @@ class PSASession {
     let detail: PSAJobDetail | null = null;
     let financial: PSAFinancial | null = null;
     let psaNotes: PSANote[] = [];
+    let estimateFolderAmount = 0;
 
     try {
       detail = await this.fetchJobDetail(raw.job_id);
@@ -817,6 +922,28 @@ class PSASession {
       console.error(`[PSA:${this.config.id}] Notes error for ${raw.job_number}:`, e);
     }
 
+    // Check primary revenue sources first; only fetch estimate folder if all are $0
+    const primaryRevenue = Math.max(
+      financial?.revenue_estimate || 0,
+      financial?.revenue_actual || 0,
+      detail?.revenuedisplay || 0,
+      detail?.completeddisplay || 0,
+      raw.list_amount || 0,
+    );
+
+    if (primaryRevenue === 0) {
+      // Fallback: fetch from estimate folder (most recent due date)
+      try {
+        const estimates = await this.fetchJobEstimates(raw.job_id);
+        if (estimates.length > 0) {
+          estimateFolderAmount = estimates[0].amount; // Most recent by due date
+          console.log(`[PSA:${this.config.id}] Estimate folder fallback for ${raw.job_number}: $${estimateFolderAmount} (${estimates[0].name})`);
+        }
+      } catch (e) {
+        console.error(`[PSA:${this.config.id}] Estimate folder error for ${raw.job_number}:`, e);
+      }
+    }
+
     // Map notes
     const notes: JobNote[] = psaNotes.map(n => ({
       date: parseDateStr(n.created) || new Date().toISOString().split('T')[0],
@@ -826,12 +953,14 @@ class PSASession {
 
     // Revenue — take the highest non-zero value across all sources
     // Financial table and detail page can each have different amounts; the highest is most accurate
+    // Estimate folder is only fetched/used as fallback when primary sources return $0
     const estimateAmount = Math.max(
       financial?.revenue_estimate || 0,
       financial?.revenue_actual || 0,
       detail?.revenuedisplay || 0,
       detail?.completeddisplay || 0,
-      raw.list_amount || 0,  // Revenue from PSA list column
+      raw.list_amount || 0,
+      estimateFolderAmount,  // Fallback from estimate folder (0 if primary sources had values)
     );
     const supplementAmount = 0;
     if (estimateAmount > 0) {
@@ -1101,6 +1230,20 @@ class PSASession {
     }
 
     console.log(`[PSA:${this.config.id}] Filtered jobs: ${filtered.length}`);
+
+    // Log target jobs that passed or failed filtering
+    const targetSeqs = ['3477', '3234', '3520', '3468', '3424', '3421', '3159'];
+    const passedFilter = filtered.filter(j => targetSeqs.some(seq => j.job_number.includes(seq)));
+    const failedFilter = allJobs.filter(j =>
+      targetSeqs.some(seq => j.job_number.includes(seq)) &&
+      !filtered.find(f => f.job_id === j.job_id)
+    );
+    if (passedFilter.length > 0) {
+      console.log(`[PSA:${this.config.id}] TARGET JOBS passed filters: ${passedFilter.map(j => j.job_number).join(', ')}`);
+    }
+    if (failedFilter.length > 0) {
+      console.log(`[PSA:${this.config.id}] TARGET JOBS FAILED filters: ${failedFilter.map(j => `${j.job_number}(t=${j.territory},y=${j.year})`).join(', ')}`);
+    }
 
     const allJobNumbers = allJobs.map(j => j.job_number);
 

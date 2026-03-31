@@ -32,7 +32,7 @@ export function getLocationConfigs(): PSALocationConfig[] {
       baseUrl: process.env.PSA_BASE_URL || 'https://uwrg.psarcweb.com/PSAWeb',
       schema: process.env.PSA_SCHEMA || '1022',
       territoryFilter: '19',
-      yearFilter: ['26'],
+      yearFilter: ['25', '26'],
     });
   }
 
