@@ -491,6 +491,15 @@ class PSASession {
         allJobs.push(job);
       }
 
+      // Log target jobs found in this page
+      const targetSeqsOpen = ['3477', '3234', '3520', '3468', '3424', '3421', '3159', '3442', '3447', '3436', '3404', '3390'];
+      for (const row of data.aaData) {
+        const jn = row[0] || row[1] || '';
+        if (targetSeqsOpen.some(seq => String(jn).includes(seq))) {
+          console.log(`[PSA:${this.config.id}] TARGET ${option} JOB in raw list: ${jn}`);
+        }
+      }
+
       offset += pageSize;
       console.log(`[PSA:${this.config.id}] Fetched ${allJobs.length}/${total} ${option} jobs...`);
     }
@@ -504,7 +513,7 @@ class PSASession {
    * Paginates to find more completed-not-invoiced jobs that PSA moved to "Closed".
    */
   async fetchRecentClosedJobs(pageSize = 300): Promise<PSARawJob[]> {
-    const maxPages = 3; // Up to 3 pages = 900 closed jobs scanned
+    const maxPages = 5; // Up to 5 pages = 1500 closed jobs scanned
     const jobs: PSARawJob[] = [];
     const targetSeqs = ['3477', '3234', '3520', '3468', '3424', '3421', '3159'];
     let totalInPSA = 0;
@@ -1285,10 +1294,18 @@ class PSASession {
     }
 
     // Filter: only exclude completed+invoiced jobs (fully done, no action needed)
+    const targetSeqsForFilter = ['3477', '3234', '3520', '3468', '3424', '3421', '3159', '3442', '3447', '3436', '3404', '3390'];
     const active = enriched.filter(j => {
+      const isTarget = targetSeqsForFilter.some(seq => j.jobNumber.includes(seq));
       if (j.completedDate && j.invoicedDate) {
+        if (isTarget) {
+          console.log(`[PSA:${this.config.id}] WARNING: Excluding TARGET job as completed+invoiced: ${j.jobNumber} (completed=${j.completedDate}, invoiced=${j.invoicedDate})`);
+        }
         console.log(`[PSA:${this.config.id}] Excluding completed+invoiced: ${j.jobNumber} (${j.customerName})`);
         return false;
+      }
+      if (isTarget) {
+        console.log(`[PSA:${this.config.id}] TARGET JOB KEPT: ${j.jobNumber} | status=${j.status} | completed=${j.completedDate} | invoiced=${j.invoicedDate} | revenue=$${j.estimateAmount}`);
       }
       return true;
     });
