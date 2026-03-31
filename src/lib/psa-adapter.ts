@@ -3,13 +3,12 @@ import { PSALocationConfig } from './psa-config';
 
 // ─── Global Configuration ────────────────────────────────────────────────────
 
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
+if (typeof process !== 'undefined') process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
-// Disable SSL verification to match MyClaw's Python approach
-// PSA's cert chain sometimes causes issues
-if (typeof process !== 'undefined') {
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-}
+// Debug target jobs — centralized list for tracking specific jobs through the pipeline
+const TARGET_JOBS = ['3477', '3234', '3520', '3468', '3424', '3421', '3159', '3442', '3447', '3436', '3404', '3390'];
+const isTargetJob = (jobNumber: string) => TARGET_JOBS.some(seq => jobNumber.includes(seq));
 
 // ─── Team Role Registry ─────────────────────────────────────────────────────
 // PSA doesn't have structured PM/Estimator/BD fields — only assigned_to (tech).
@@ -492,14 +491,6 @@ class PSASession {
       }
 
       // Log target jobs found in this page
-      const targetSeqsOpen = ['3477', '3234', '3520', '3468', '3424', '3421', '3159', '3442', '3447', '3436', '3404', '3390'];
-      for (const row of data.aaData) {
-        const jn = row[0] || row[1] || '';
-        if (targetSeqsOpen.some(seq => String(jn).includes(seq))) {
-          console.log(`[PSA:${this.config.id}] TARGET ${option} JOB in raw list: ${jn}`);
-        }
-      }
-
       offset += pageSize;
       console.log(`[PSA:${this.config.id}] Fetched ${allJobs.length}/${total} ${option} jobs...`);
     }
@@ -515,7 +506,6 @@ class PSASession {
   async fetchRecentClosedJobs(pageSize = 300): Promise<PSARawJob[]> {
     const maxPages = 5; // Up to 5 pages = 1500 closed jobs scanned
     const jobs: PSARawJob[] = [];
-    const targetSeqs = ['3477', '3234', '3520', '3468', '3424', '3421', '3159'];
     let totalInPSA = 0;
     let totalFetched = 0;
 
@@ -553,9 +543,8 @@ class PSASession {
         const job = this.parseRowToJob(row);
         this.parseJobNumber(job);
 
-        // Log target jobs found in raw data
-        if (targetSeqs.some(seq => job.job_number.includes(seq))) {
-          console.log(`[PSA:${this.config.id}] TARGET CLOSED JOB FOUND: ${job.job_number} (territory=${job.territory}, year=${job.year}, type=${job.job_type_code})`);
+        if (isTargetJob(job.job_number)) {
+          console.log(`[PSA:${this.config.id}] TARGET CLOSED: ${job.job_number} (t=${job.territory}, y=${job.year})`);
         }
 
         // Pre-filter: only keep jobs matching territory and year
@@ -680,7 +669,7 @@ class PSASession {
     const postalVal = extractInputValue(html, 'Entity_rm_site_PostalCode');
     if (postalVal) detail.site_postalcode = postalVal;
 
-    console.log(`[PSA:${this.config.id}] Detail for ${jobId}: alt_status="${detail.alt_status}", revenue=${detail.revenuedisplay}, dates=${Object.keys(detail.dates).length}, phones=${detail.phones.length}`);
+    // Detail fetched for jobId (alt_status, revenue, dates, phones parsed)
     return detail;
   }
 
@@ -769,9 +758,6 @@ class PSASession {
       }
     }
 
-    const revenueTokenIdx = tokens.findIndex(t => t === 'Revenue');
-    const revenueContext = revenueTokenIdx >= 0 ? tokens.slice(revenueTokenIdx, revenueTokenIdx + 8).join(' | ') : 'Revenue token not found';
-    console.log(`[PSA:${this.config.id}] Financial: rev_est=${financial.revenue_estimate}, rev_act=${financial.revenue_actual} | html=${html.length}chars | tokens=${tokens.length} | revCtx=[${revenueContext}]`);
     return financial;
   }
 
@@ -973,7 +959,8 @@ class PSASession {
     );
     const supplementAmount = 0;
     if (estimateAmount > 0) {
-      console.log(`[PSA:${this.config.id}] Revenue for ${raw.job_number}: $${estimateAmount} (fin_est=${financial?.revenue_estimate}, fin_act=${financial?.revenue_actual}, detail_rev=${detail?.revenuedisplay})`);
+      // Revenue logged only for target jobs to reduce noise
+      if (isTargetJob(raw.job_number)) console.log(`[PSA:${this.config.id}] Revenue ${raw.job_number}: $${estimateAmount}`);
     }
 
     // Type
@@ -1240,19 +1227,11 @@ class PSASession {
 
     console.log(`[PSA:${this.config.id}] Filtered jobs: ${filtered.length}`);
 
-    // Log target jobs that passed or failed filtering
-    const targetSeqs = ['3477', '3234', '3520', '3468', '3424', '3421', '3159'];
-    const passedFilter = filtered.filter(j => targetSeqs.some(seq => j.job_number.includes(seq)));
-    const failedFilter = allJobs.filter(j =>
-      targetSeqs.some(seq => j.job_number.includes(seq)) &&
-      !filtered.find(f => f.job_id === j.job_id)
-    );
-    if (passedFilter.length > 0) {
-      console.log(`[PSA:${this.config.id}] TARGET JOBS passed filters: ${passedFilter.map(j => j.job_number).join(', ')}`);
-    }
-    if (failedFilter.length > 0) {
-      console.log(`[PSA:${this.config.id}] TARGET JOBS FAILED filters: ${failedFilter.map(j => `${j.job_number}(t=${j.territory},y=${j.year})`).join(', ')}`);
-    }
+    // Log target jobs status through filter
+    const targetPassed = filtered.filter(j => isTargetJob(j.job_number));
+    const targetFailed = allJobs.filter(j => isTargetJob(j.job_number) && !filtered.find(f => f.job_id === j.job_id));
+    if (targetPassed.length) console.log(`[PSA:${this.config.id}] Targets passed: ${targetPassed.map(j => j.job_number).join(', ')}`);
+    if (targetFailed.length) console.log(`[PSA:${this.config.id}] Targets filtered out: ${targetFailed.map(j => `${j.job_number}(t=${j.territory},y=${j.year})`).join(', ')}`);
 
     const allJobNumbers = allJobs.map(j => j.job_number);
 
@@ -1319,19 +1298,11 @@ class PSASession {
       console.log(`[PSA:${this.config.id}] Excluded ${closedExcluded.length} closed jobs without completion evidence`);
     }
 
-    // Filter: only exclude completed+invoiced jobs (fully done, no action needed)
-    const targetSeqsForFilter = ['3477', '3234', '3520', '3468', '3424', '3421', '3159', '3442', '3447', '3436', '3404', '3390'];
+    // Exclude completed+invoiced jobs (fully done, no action needed)
     const active = afterClosedFilter.filter(j => {
-      const isTarget = targetSeqsForFilter.some(seq => j.jobNumber.includes(seq));
       if (j.completedDate && j.invoicedDate) {
-        if (isTarget) {
-          console.log(`[PSA:${this.config.id}] WARNING: Excluding TARGET job as completed+invoiced: ${j.jobNumber} (completed=${j.completedDate}, invoiced=${j.invoicedDate})`);
-        }
-        console.log(`[PSA:${this.config.id}] Excluding completed+invoiced: ${j.jobNumber} (${j.customerName})`);
+        if (isTargetJob(j.jobNumber)) console.log(`[PSA:${this.config.id}] Target excluded (invoiced): ${j.jobNumber}`);
         return false;
-      }
-      if (isTarget) {
-        console.log(`[PSA:${this.config.id}] TARGET JOB KEPT: ${j.jobNumber} | status=${j.status} | completed=${j.completedDate} | invoiced=${j.invoicedDate} | revenue=$${j.estimateAmount}`);
       }
       return true;
     });
@@ -1531,21 +1502,7 @@ class PSAAdapter implements DataAdapter {
   }
 }
 
-// ─── Factory Functions ───────────────────────────────────────────────────────
-
-export function createPSAAdapter(): DataAdapter {
-  // Default: uses T-19 config from env vars
-  return createPSAAdapterForConfig({
-    id: 't19',
-    name: 'T-19 Pompano',
-    username: process.env.PSA_USERNAME || '',
-    password: process.env.PSA_PASSWORD || '',
-    baseUrl: process.env.PSA_BASE_URL || 'https://uwrg.psarcweb.com/PSAWeb',
-    schema: process.env.PSA_SCHEMA || '1022',
-    territoryFilter: '19',
-    yearFilter: ['26'],
-  });
-}
+// ─── Factory ─────────────────────────────────────────────────────────────────
 
 export function createPSAAdapterForConfig(config: PSALocationConfig): DataAdapter {
   return new PSAAdapter(config);
@@ -1673,69 +1630,3 @@ export async function debugJobDetail(jobId: number): Promise<Record<string, unkn
   }
 }
 
-export async function debugT19Status(): Promise<Record<string, unknown>> {
-  try {
-    const config: PSALocationConfig = {
-      id: 't19',
-      name: 'T-19 Pompano',
-      username: process.env.PSA_USERNAME || '',
-      password: process.env.PSA_PASSWORD || '',
-      baseUrl: process.env.PSA_BASE_URL || 'https://uwrg.psarcweb.com/PSAWeb',
-      schema: process.env.PSA_SCHEMA || '1022',
-      territoryFilter: '19',
-      yearFilter: ['26'],
-    };
-
-    const session = new PSASession(config);
-    await session.login();
-
-    const formData: Record<string, string | number> = {
-      option: 'Open',
-      iDisplayStart: 0,
-      iDisplayLength: 100,
-      sEcho: 1,
-      iColumns: 11,
-      iSortCol_0: 8,
-      sSortDir_0: 'desc',
-      iSortingCols: 1,
-      mDataProp_10: 'id',
-    };
-    for (let i = 0; i < 10; i++) {
-      formData[`mDataProp_${i}`] = `col${i}`;
-    }
-
-    const body = await session.psaPost('/Job/Job/ListFilter', formData);
-    const data = JSON.parse(body);
-
-    const t19Jobs = (data.aaData || [])
-      .filter((row: string[]) => (row[0] || '').startsWith('19-'))
-      .slice(0, 3)
-      .map((row: string[]) => ({
-        jobNumber: row[0],
-        clientName: row[1],
-        listStatus: row[9],
-        jobId: row[10],
-      }));
-
-    if (t19Jobs.length === 0) {
-      return { error: 'No T-19 jobs found in first 100 open jobs' };
-    }
-
-    const results = [];
-    for (const job of t19Jobs) {
-      const detail = await debugJobDetail(job.jobId);
-      results.push({
-        ...job,
-        debug: detail,
-      });
-    }
-
-    return {
-      nodeVersion: process.version,
-      t19JobsFound: t19Jobs.length,
-      results,
-    };
-  } catch (e) {
-    return { error: e instanceof Error ? e.message : String(e) };
-  }
-}

@@ -1,4 +1,5 @@
-import { createAdapter } from '@/lib/adapter';
+import { createAdapterForLocation } from '@/lib/adapter';
+import { getLocationConfigs } from '@/lib/psa-config';
 import { scoreAllJobs } from '@/lib/scoring-engine';
 import Link from 'next/link';
 
@@ -7,7 +8,10 @@ export const dynamic = 'force-dynamic';
 const fmt = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
 
 export default async function OpportunitiesPage() {
-  const adapter = createAdapter();
+  const configs = getLocationConfigs();
+  const config = configs[0]; // Default to first location
+  if (!config) return <p>No PSA locations configured</p>;
+  const adapter = createAdapterForLocation(config);
   const jobs = await adapter.getJobs();
   const scored = scoreAllJobs(jobs);
 

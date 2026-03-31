@@ -42,7 +42,7 @@ function scoreInactivity(job: Job): { points: number; explanation: string } {
 
 // ─── Factor 4: IICRC Gaps (8 pts each) ───────────────────────────────────────
 
-export function getIICRCItems(job: Job): ChecklistItem[] {
+function getIICRCItems(job: Job): ChecklistItem[] {
   const items: ChecklistItem[] = [];
   const s = job.status;
 
@@ -79,7 +79,7 @@ function scoreIICRCGaps(job: Job): { points: number; explanation: string; items:
 
 // ─── Factor 5: Ticket Gaps (5 pts each) ──────────────────────────────────────
 
-export function getTicketItems(job: Job): ChecklistItem[] {
+function getTicketItems(job: Job): ChecklistItem[] {
   const items: ChecklistItem[] = [];
   const s = job.status;
 
@@ -112,7 +112,7 @@ function scoreTicketGaps(job: Job): { points: number; explanation: string; items
 
 // ─── Factor 6: Upsell Opportunities (6 pts each) ────────────────────────────
 
-export function getUpsellItems(job: Job): UpsellItem[] {
+function getUpsellItems(job: Job): UpsellItem[] {
   const items: UpsellItem[] = [];
   const total = job.estimateAmount + job.supplementAmount;
   const isWtrMld = job.type === 'WTR' || job.type === 'MLD';
@@ -153,7 +153,7 @@ function scoreUpsells(job: Job): { points: number; explanation: string; items: U
 
 // ─── Ticket Expansion Opportunities (dollar ranges) ──────────────────────────
 
-export function getTicketExpansionItems(job: Job): TicketExpansionItem[] {
+function getTicketExpansionItems(job: Job): TicketExpansionItem[] {
   const items: TicketExpansionItem[] = [];
   const isWtrMld = job.type === 'WTR' || job.type === 'MLD';
   const isActive = ['Scoped', 'Sales', 'WIP'].includes(job.status);
@@ -198,7 +198,7 @@ export function getTicketExpansionItems(job: Job): TicketExpansionItem[] {
 
 // ─── Commercial Outreach Tips ────────────────────────────────────────────────
 
-export function getOutreachTips(job: Job): OutreachTip[] {
+function getOutreachTips(job: Job): OutreachTip[] {
   const tips: OutreachTip[] = [];
 
   // Detect commercial / multi-unit properties from referrer, customer name, or address keywords
